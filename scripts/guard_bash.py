@@ -29,8 +29,8 @@ FLAGS_WITH_VALUE = {
 }  # fmt: skip
 SEPARATORS = {";", "&&", "||", "|", "&"}
 CONFIG_FILES = (
-    ".plainpy.toml", "ruff.toml", "pyrightconfig.json", "complexipy.toml",
-    "tach.toml", "mypy.ini", "pylintrc", ".coveragerc", "pyproject.toml",
+    ".plainpy.toml", "ruff.toml", ".ruff.toml", "pyrightconfig.json", "complexipy.toml",
+    "tach.toml", "mypy.ini", ".mypy.ini", "pylintrc", ".pylintrc", ".coveragerc", "pyproject.toml",
 )  # fmt: skip
 WRITERS = {"tee", "mv", "cp", "rm", "truncate", "ln"}
 IN_PLACE_EDITORS = {"sed", "perl"}
