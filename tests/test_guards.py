@@ -129,6 +129,17 @@ def test_new_runtime_dependencies_ask_the_user(pyproject: Path, tmp_path: Path) 
     assert edit(requirements, "httpx\n", "httpx\nrich==13.0\n") == "ask"
 
 
+@pytest.mark.parametrize("content", ["", "# emptied\n", "[project\nname = 'broken'\n"])
+def test_wiping_or_breaking_pyproject_config_asks_the_user(pyproject: Path, content: str) -> None:
+    assert decision("guard_edit.py", {"file_path": str(pyproject), "content": content}) == "ask"
+
+
+def test_rewriting_a_pyproject_without_tool_config_passes(tmp_path: Path) -> None:
+    plain = tmp_path / "pyproject.toml"
+    plain.write_text('[project]\nname = "demo"\n')
+    assert decision("guard_edit.py", {"file_path": str(plain), "content": "# emptied\n"}) is None
+
+
 def test_unrelated_pyproject_and_file_edits_pass(pyproject: Path, tmp_path: Path) -> None:
     assert edit(pyproject, 'version = "0"', 'version = "1"') is None
     assert edit(pyproject, '["httpx>=0.27"]', '["httpx>=0.28"]') is None
@@ -148,6 +159,14 @@ def test_unrelated_pyproject_and_file_edits_pass(pyproject: Path, tmp_path: Path
         "echo 'ignore = [\"C901\"]' >> ruff.toml",
         "sed -i '' 's/max-complexity = 10/max-complexity = 30/' pyproject.toml",
         "rm .plainpy.toml",
+        "rm .pylintrc",
+        "echo 'ignore = [\"C901\"]' >> .ruff.toml",
+        "cp other.ini .mypy.ini",
+        "uv add --dev pytest\nuv add requests",
+        "cat README.md\nsed -i s/10/30/ pyproject.toml",
+        "ls;\n\nuv add rich",
+        "cat > ruff.toml <<'EOF'\n[lint]\nignore = ['C901']\nEOF",
+        "uv add requests 2>&1 | tail -3",
     ],
 )
 def test_shell_dependency_and_config_changes_ask_the_user(command: str) -> None:
@@ -165,6 +184,10 @@ def test_shell_dependency_and_config_changes_ask_the_user(command: str) -> None:
         "grep -n ruff pyproject.toml 2>/dev/null",
         "uv run pytest -q > out.txt",
         "ls -la",
+        "grep '> pyproject.toml' notes.md",
+        "echo 'see >> ruff.toml in the docs'",
+        "uv add --dev pytest\nuv add --dev ruff",
+        "git commit -m 'Raise limit\n\nuv add requests is not run here'",
     ],
 )
 def test_ordinary_shell_commands_pass(command: str) -> None:

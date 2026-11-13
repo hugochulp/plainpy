@@ -21,6 +21,16 @@ PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
+# Files whose only job is configuring checks; any change to them needs the user's approval.
+# pyproject.toml is judged per [tool.*] section instead (see guard_edit).
+CONFIG_FILES = frozenset(
+    {
+        ".plainpy.toml", "ruff.toml", ".ruff.toml", "pyrightconfig.json", "complexipy.toml",
+        "tach.toml", "mypy.ini", ".mypy.ini", ".pylintrc", "pylintrc", ".coveragerc",
+    }
+)  # fmt: skip
+
+
 @dataclass(frozen=True)
 class Settings:
     profile: str

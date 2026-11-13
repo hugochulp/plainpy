@@ -24,7 +24,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from _common import pre_tool_decision, read_hook_input
+from _common import CONFIG_FILES, pre_tool_decision, read_hook_input
 
 FILE_WIDE = re.compile(
     r"#\s*(ruff:\s*noqa|flake8:\s*noqa|mypy:\s*ignore-errors|pylint:\s*skip-file|pyright:\s*basic)", re.IGNORECASE
@@ -38,10 +38,6 @@ LINE_LEVEL = re.compile(
 REASON = re.compile(r"\s--\s+\S+(?:\s+\S+){2,}")
 UNCODED_KINDS = ("pragma",)
 
-CONFIG_FILES = {
-    ".plainpy.toml", "ruff.toml", ".ruff.toml", "pyrightconfig.json", "complexipy.toml",
-    "tach.toml", "mypy.ini", ".mypy.ini", ".pylintrc", "pylintrc", ".coveragerc",
-}  # fmt: skip
 CONFIG_SECTIONS = (
     "ruff", "basedpyright", "pyright", "complexipy", "mypy", "pylint",
     "vulture", "deptry", "tach", "pyrefly", "ty", "coverage", "plainpy",
@@ -93,11 +89,12 @@ def suppression_problems(before: str, after: str) -> list[str]:
     return [problem for comment in added.elements() if (problem := suppression_problem(comment))]
 
 
-def toml_or_empty(text: str) -> dict[str, Any]:
+def parse_toml(text: str) -> dict[str, Any] | None:
+    """The parsed document ({} for an empty one), or None if it isn't valid TOML."""
     try:
         return tomllib.loads(text)
     except tomllib.TOMLDecodeError:
-        return {}
+        return None
 
 
 def requirement_names(lines: list[str]) -> set[str]:
@@ -107,10 +104,12 @@ def requirement_names(lines: list[str]) -> set[str]:
 
 def pyproject_changes(before: str, after: str) -> tuple[list[str], set[str]]:
     """(changed tool sections, newly added runtime dependencies)."""
-    old, new = toml_or_empty(before), toml_or_empty(after)
-    if not new:
-        return [], set()
-    old_tool, new_tool = old.get("tool", {}), new.get("tool", {})
+    old, new = parse_toml(before) or {}, parse_toml(after)
+    old_tool = old.get("tool", {})
+    if new is None:
+        # The edit can't be compared, so every protected section it had may be at stake.
+        return [name for name in CONFIG_SECTIONS if name in old_tool], set()
+    new_tool = new.get("tool", {})
     changed = [name for name in CONFIG_SECTIONS if old_tool.get(name) != new_tool.get(name)]
     old_deps = requirement_names(old.get("project", {}).get("dependencies", []))
     new_deps = requirement_names(new.get("project", {}).get("dependencies", []))

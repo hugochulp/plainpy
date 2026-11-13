@@ -12,11 +12,11 @@ this hook doesn't recognise passes too: it never denies on its own.
 
 from __future__ import annotations
 
-import re
 import shlex
+from itertools import takewhile
 from pathlib import Path
 
-from _common import pre_tool_decision, read_hook_input
+from _common import CONFIG_FILES, pre_tool_decision, read_hook_input
 
 INSTALLERS = {
     ("uv", "add"), ("poetry", "add"), ("pdm", "add"), ("pip", "install"),
@@ -27,27 +27,39 @@ FLAGS_WITH_VALUE = {
     "-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-i", "--index-url",
     "--extra-index-url", "--index", "--group", "-G", "--optional", "--python", "-p",
 }  # fmt: skip
-SEPARATORS = {";", "&&", "||", "|", "&"}
-CONFIG_FILES = (
-    ".plainpy.toml", "ruff.toml", ".ruff.toml", "pyrightconfig.json", "complexipy.toml",
-    "tach.toml", "mypy.ini", ".mypy.ini", "pylintrc", ".pylintrc", ".coveragerc", "pyproject.toml",
-)  # fmt: skip
+SHELL_PROTECTED = CONFIG_FILES | {"pyproject.toml"}
 WRITERS = {"tee", "mv", "cp", "rm", "truncate", "ln"}
 IN_PLACE_EDITORS = {"sed", "perl"}
-REDIRECT_TARGET = re.compile(r">>?\s*['\"]?([^\s'\";&|]+)")
+OPERATOR_CHARS = "();<>|&\n"
 
 
-def split_commands(command: str) -> list[list[str]]:
-    """Split a shell line into simple commands at ; && || | &."""
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+def shell_tokens(command: str) -> list[str]:
+    """Quote-aware words. Unquoted operators (; && | > >> ...) and newlines become their
+    own tokens; quoted text, newlines inside quotes included, stays inside its word."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=OPERATOR_CHARS)
+    lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
+    lexer.commenters = ""
     try:
-        tokens = list(lexer)
+        return list(lexer)
     except ValueError:
-        return [command.split()]
+        return command.split()
+
+
+def is_operator(token: str) -> bool:
+    return bool(token) and set(token) <= set(OPERATOR_CHARS)
+
+
+def is_redirect(token: str) -> bool:
+    return is_operator(token) and ">" in token
+
+
+def split_commands(tokens: list[str]) -> list[list[str]]:
+    """Simple commands, split at ; && || | & ( ) and unquoted newlines. Redirections stay
+    inside their command."""
     commands: list[list[str]] = [[]]
     for token in tokens:
-        if token in SEPARATORS:
+        if is_operator(token) and not set(token) & set("<>"):
             commands.append([])
         else:
             commands[-1].append(token)
@@ -63,15 +75,16 @@ def installed_packages(words: list[str]) -> list[str]:
     verb_at = next((i for i in range(len(words) - 1) if (Path(words[i]).name, words[i + 1]) in INSTALLERS), None)
     if verb_at is None:
         return []
-    args = words[verb_at + 2 :]
+    args = list(takewhile(lambda word: not is_operator(word), words[verb_at + 2 :]))
     if DEV_FLAGS.intersection(args):
         return []
     values = {args[i + 1] for i, arg in enumerate(args[:-1]) if arg in FLAGS_WITH_VALUE}
-    return [arg for arg in args if is_package(arg) and arg not in values]
+    return [arg for arg in args if is_package(arg) and not arg.isdigit() and arg not in values]
 
 
 def config_name(word: str) -> str | None:
-    return next((name for name in CONFIG_FILES if Path(word).name == name), None)
+    name = Path(word).name
+    return name if name in SHELL_PROTECTED else None
 
 
 def written_files(words: list[str]) -> list[str]:
@@ -83,19 +96,21 @@ def written_files(words: list[str]) -> list[str]:
     return [name for word in words[1:] if (name := config_name(word))]
 
 
-def touched_config(command: str) -> list[str]:
-    redirected = [name for target in REDIRECT_TARGET.findall(command) if (name := config_name(target))]
-    written = [name for words in split_commands(command) for name in written_files(words)]
+def touched_config(tokens: list[str], commands: list[list[str]]) -> list[str]:
+    targets = [tokens[i + 1] for i, token in enumerate(tokens[:-1]) if is_redirect(token)]
+    redirected = [name for target in targets if (name := config_name(target))]
+    written = [name for words in commands for name in written_files(words)]
     return sorted(set(redirected + written))
 
 
 def main() -> None:
-    command = read_hook_input().get("tool_input", {}).get("command", "")
-    packages = [package for words in split_commands(command) for package in installed_packages(words)]
+    tokens = shell_tokens(read_hook_input().get("tool_input", {}).get("command", ""))
+    commands = split_commands(tokens)
+    packages = [package for words in commands for package in installed_packages(words)]
     if packages:
         pre_tool_decision("ask", f"plainpy: Claude wants to add runtime dependencies: {', '.join(packages)}. Allow it?")
         return
-    files = touched_config(command)
+    files = touched_config(tokens, commands)
     if files:
         pre_tool_decision("ask", f"plainpy: this shell command may change {', '.join(files)}. Allow it?")
 
