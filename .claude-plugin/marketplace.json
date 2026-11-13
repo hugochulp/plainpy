@@ -1,0 +1,13 @@
+{
+  "name": "plainpy",
+  "description": "Anti-slop guardrails for Python written with Claude Code",
+  "owner": { "name": "plainpy maintainers" },
+  "plugins": [
+    {
+      "name": "plainpy",
+      "source": "./",
+      "description": "Per-edit Ruff and cognitive-complexity gates that judge only what Claude changed.",
+      "version": "0.1.0"
+    }
+  ]
+}

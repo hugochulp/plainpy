@@ -1,0 +1,30 @@
+{
+  "description": "plainpy: record the base revision at session start; lint and complexity-check every edited Python file.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --quiet --script \"${CLAUDE_PLUGIN_ROOT}/scripts/session_start.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --quiet --script \"${CLAUDE_PLUGIN_ROOT}/scripts/check_file.py\"",
+            "timeout": 60,
+            "statusMessage": "plainpy: checking edited file"
+          }
+        ]
+      }
+    ]
+  }
+}

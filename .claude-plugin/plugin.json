@@ -1,0 +1,8 @@
+{
+  "name": "plainpy",
+  "version": "0.1.0",
+  "description": "Keeps Claude's Python small and flat: per-edit Ruff and cognitive-complexity gates that judge only what Claude changed.",
+  "author": { "name": "plainpy maintainers" },
+  "license": "MIT",
+  "keywords": ["python", "lint", "ruff", "complexity", "code-quality"]
+}

@@ -1,0 +1,6 @@
+# Pinned versions of the external tools plainpy runs through `uvx tool@version`.
+# If a project has the tool in its own .venv, that copy is used instead,
+# so the editor, CI and plugin agree.
+[tools]
+ruff = "0.17.5"
+complexipy = "9.0.0"
