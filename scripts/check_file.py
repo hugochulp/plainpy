@@ -53,6 +53,7 @@ IGNORED = ("TRY003", "PLR2004", "F401")
 IGNORED_IN_TESTS = ("S101", "S105", "S106", "ANN", "ARG", "PLR2004")
 METRIC = re.compile(r"\((\d+) > (\d+)\)")
 MAX_SHOWN = 20
+MAX_ROWS_LISTED = 6
 
 COMPLEXITY_HINT = (
     "flatten it: early returns, guard clauses, a dict lookup, or drop cases nobody "
@@ -244,19 +245,51 @@ def check(run: Run) -> list[Finding]:
         return new_findings(current.result(), previous.result() if previous else [])
 
 
+def group_line(rule: str, group: list[Finding], shown_path: str) -> str:
+    """One line per rule: `path:12 RULE msg`, or `path RULE x3 at lines 4, 9, 15: first msg`."""
+    rows = sorted({f.line for f in group})
+    if len(group) == 1:
+        return f"{shown_path}:{rows[0]} {rule} {group[0].message}"
+    listed = ", ".join(str(row) for row in rows[:MAX_ROWS_LISTED])
+    more = ", ..." if len(rows) > MAX_ROWS_LISTED else ""
+    where = f"line{'s' if len(rows) > 1 else ''} {listed}{more}"
+    return f"{shown_path} {rule} x{len(group)} at {where}: {group[0].message}"
+
+
+def finding_lines(findings: list[Finding], shown_path: str) -> list[str]:
+    """Size and complexity findings one per function, first; other rules grouped."""
+    ordered = sorted(findings, key=lambda f: (f.value is None, f.line))
+    lines = [f"{shown_path}:{f.line} {f.rule} {f.message}" for f in ordered if f.value is not None]
+    groups: dict[str, list[Finding]] = {}
+    for finding in ordered:
+        if finding.value is None:
+            groups.setdefault(finding.rule, []).append(finding)
+    return lines + [group_line(rule, group, shown_path) for rule, group in groups.items()]
+
+
+def hint_lines(findings: list[Finding]) -> list[str]:
+    """Each fix hint once, with the rules it applies to."""
+    rules_by_hint: dict[str, list[str]] = {}
+    for finding in sorted(findings, key=lambda f: f.line):
+        hint = HINTS.get(finding.rule)
+        if hint is not None and finding.rule not in rules_by_hint.setdefault(hint, []):
+            rules_by_hint[hint].append(finding.rule)
+    return [f"- {', '.join(rules)}: {hint}" for hint, rules in rules_by_hint.items()]
+
+
 def format_report(findings: list[Finding], run: Run) -> str:
     try:
         shown_path = run.path.resolve().relative_to(run.project).as_posix()
     except ValueError:
         shown_path = str(run.path)
-    count = len(findings)
-    lines = [f"plainpy ({run.settings.profile}): {count} new problem(s) in {shown_path}. Fix them now:"]
-    for finding in sorted(findings, key=lambda f: f.line)[:MAX_SHOWN]:
-        lines.append(f"{shown_path}:{finding.line} {finding.rule} {finding.message}")
-        if finding.rule in HINTS:
-            lines.append(f"  how: {HINTS[finding.rule]}")
-    if count > MAX_SHOWN:
-        lines.append(f"...and {count - MAX_SHOWN} more.")
+    header = f"plainpy ({run.settings.profile}): {len(findings)} new problem(s) in {shown_path}. Fix them now:"
+    entries = finding_lines(findings, shown_path)
+    lines = [header, *entries[:MAX_SHOWN]]
+    if len(entries) > MAX_SHOWN:
+        lines.append(f"...and {len(entries) - MAX_SHOWN} more.")
+    hints = hint_lines(findings)
+    if hints:
+        lines += ["How to fix:", *hints]
     return "\n".join(lines)
 
 
