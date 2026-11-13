@@ -75,8 +75,8 @@ def test_session_start_records_base_and_adds_doctrine(repo: Path) -> None:
     output = json.loads(result.stdout)
     assert "plainpy is active (standard profile)" in output["hookSpecificOutput"]["additionalContext"]
     state_files = list(Path(os.environ["CLAUDE_PLUGIN_DATA"]).glob("projects/*/state.json"))
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True)
-    assert json.loads(state_files[0].read_text())["base"] == head.stdout.strip()
+    tree = subprocess.run(["git", "rev-parse", "HEAD^{tree}"], cwd=repo, capture_output=True, text=True, check=True)
+    assert json.loads(state_files[0].read_text())["sessions"]["default"]["base"] == tree.stdout.strip()
 
 
 def test_session_start_is_silent_outside_python_projects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

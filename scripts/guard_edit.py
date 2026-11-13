@@ -84,9 +84,14 @@ def suppression_problem(comment: str) -> str | None:
     return None
 
 
-def suppression_problems(before: str, after: str) -> list[str]:
+def added_suppressions(before: str, after: str) -> list[str]:
+    """Suppression comments in `after` that were not in `before`."""
     added = Counter(comments(after)) - Counter(comments(before))
-    return [problem for comment in added.elements() if (problem := suppression_problem(comment))]
+    return [comment for comment in added.elements() if FILE_WIDE.search(comment) or LINE_LEVEL.search(comment)]
+
+
+def suppression_problems(before: str, after: str) -> list[str]:
+    return [problem for comment in added_suppressions(before, after) if (problem := suppression_problem(comment))]
 
 
 def parse_toml(text: str) -> dict[str, Any] | None:
@@ -139,7 +144,7 @@ def main() -> None:
     if not file_path:
         return
     path = Path(file_path)
-    before = path.read_text() if path.is_file() else ""
+    before = path.read_text(errors="replace") if path.is_file() else ""
     after = after_edit(tool_input, before)
     if after is None:
         return

@@ -44,6 +44,11 @@ The hook prints the file, line, rule and limit. Fix the cause:
 | Cognitive complexity (CPX001), C901, too many branches or returns | Early returns and guard clauses; replace `if/elif` chains on a value with a dict lookup; merge duplicate branches; drop cases the task does not need | Split into single-use helpers, add a strategy class, or hide branches in lambdas |
 | Too many arguments (PLR0913/PLR0917) | Remove parameters callers never vary; make the rest keyword-only | Bundle them into a new config class |
 | Too many statements (PLR0915) | Remove what the task does not need, then extract a step only if it has a name and a second use | Chop the function into numbered steps |
+| Type error (basedpyright) | Fix the types at their source | Add `Any`, `cast()` or `# type: ignore` |
+| Unused code (vulture) | Delete it, or ask the user to whitelist it if it's used dynamically | Add a fake caller to keep it alive |
+| One-method class (R0903) | Turn it into a function | Add a second method to pass the check |
+| Duplicated code (R0801) | Keep one copy, next to its callers | Move it into a new `utils.py` |
+| Failing test | Fix the code, or the test if the test is wrong and the user agrees | Delete, skip or weaken the test |
 | Any rule | Change the code | Add `# noqa`, `# type: ignore`, or edit lint config |
 
 Only code you changed is judged. Do not "fix" unrelated existing code unless asked.
