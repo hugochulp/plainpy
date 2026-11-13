@@ -38,6 +38,19 @@ def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload))
 
 
+def pre_tool_decision(decision: str, reason: str) -> None:
+    """Answer a PreToolUse hook: "deny" goes back to Claude, "ask" prompts the user."""
+    emit(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": decision,
+                "permissionDecisionReason": reason,
+            }
+        }
+    )
+
+
 def project_dir(hook_input: dict[str, Any]) -> Path:
     env_dir = os.environ.get("CLAUDE_PROJECT_DIR")
     return Path(env_dir or hook_input.get("cwd") or Path.cwd()).resolve()

@@ -27,6 +27,8 @@ plainpy is active ({profile} profile). Python you write here is checked after ev
 - Keep the diff small. Use the stdlib before adding a dependency.
 - When a check fails, flatten the logic (early returns, guard clauses, a dict lookup, fewer cases).
   Never split code into single-use helpers, wrap it in new classes, or add noqa/type: ignore to pass.
+- A suppression comment is refused unless it names the rule and gives a reason after ` -- `.
+  Lint config changes and new runtime dependencies need the user's approval.
 Only code you changed is judged; existing problems elsewhere are not your task unless asked."""
 
 
