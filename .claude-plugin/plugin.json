@@ -1,6 +1,6 @@
 {
   "name": "plainpy",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Keeps Claude's Python small and flat: per-edit Ruff and cognitive-complexity gates that judge only what Claude changed.",
   "author": { "name": "Hugo", "url": "https://github.com/hugochulp" },
   "repository": "https://github.com/hugochulp/plainpy",

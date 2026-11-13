@@ -1,6 +1,28 @@
 {
-  "description": "plainpy: record the base revision at session start; lint and complexity-check every edited Python file.",
+  "description": "plainpy: record the base revision at session start; block new suppressions and ask before config or dependency changes; lint and complexity-check every edited Python file.",
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --quiet --script \"${CLAUDE_PLUGIN_ROOT}/scripts/guard_edit.py\"",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --quiet --script \"${CLAUDE_PLUGIN_ROOT}/scripts/guard_bash.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "startup|resume|clear|compact",

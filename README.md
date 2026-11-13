@@ -3,14 +3,26 @@
 A Claude Code plugin that keeps the Python Claude writes small and flat.
 It does this with deterministic checks run as hooks, not with longer instructions.
 
-**Status: v0.1.** Per-edit lint and complexity checks. Guards against suppressions,
-the full check when Claude finishes, and the custom anti-abstraction rules come in later
+**Status: v0.2.** Per-edit lint and complexity checks, plus guards against silencing them.
+The full check when Claude finishes and the custom anti-abstraction rules come in later
 milestones.
 
-## What v0.1 does
+## What it does
 
 - **Session start:** records the base revision (the merge-base with your default branch,
   else `HEAD`) and adds a short coding doctrine to Claude's context.
+- **Before every Write/Edit:**
+  - a new suppression comment in a `.py` file is **refused** unless it names the exact rule
+    and gives a reason: `# noqa: C901 -- parser mirrors the spec grammar`. File-wide
+    suppressions (`# ruff: noqa`, `# mypy: ignore-errors`, `# pylint: skip-file`, ...) are
+    always refused. Covers `noqa` (including complexipy's), `type: ignore`, `pyright: ignore`,
+    `pyrefly: ignore`, `ty: ignore`, `pylint: disable` and `pragma: no cover`;
+  - a change to lint or type-checker config (`[tool.ruff]` and similar sections of
+    `pyproject.toml`, `ruff.toml`, `.plainpy.toml`, `pyrightconfig.json`, ...) or a new
+    runtime dependency (`[project.dependencies]`, `requirements*.txt`) **asks you** first.
+- **Before every shell command:** `uv add`, `pip install`, `poetry add`, `pdm add`,
+  `conda install` with new runtime packages, or a shell write to a config file, **asks you**
+  first. Dev-only installs (`--dev`, `--group`) and `pip install -r` / `-e .` pass.
 - **After every Write/Edit of a `.py` file:**
   1. applies safe Ruff fixes and formats the file;
   2. lints it with a broad Ruff rule set and checks cognitive complexity with complexipy;

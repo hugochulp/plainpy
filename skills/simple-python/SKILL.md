@@ -48,6 +48,20 @@ The hook prints the file, line, rule and limit. Fix the cause:
 
 Only code you changed is judged. Do not "fix" unrelated existing code unless asked.
 
+## Suppressions, config and dependencies
+
+plainpy refuses new suppression comments that don't name the rule and give a reason.
+File-wide suppressions (`# ruff: noqa`, `# mypy: ignore-errors`, ...) are always refused.
+When a suppression really is the right call, which is rare, write it like this:
+
+```python
+result = legacy_api(payload)  # type: ignore[no-untyped-call] -- vendor SDK ships without stubs
+```
+
+Changes to lint or type-checker config (`[tool.ruff]`, `ruff.toml`, `.plainpy.toml`, ...)
+and new runtime dependencies go to the user for approval. Don't try to route around this
+through the shell; ask the user, and explain why the change is needed.
+
 ## Examples
 
 Branching on a value becomes a lookup:

@@ -21,6 +21,16 @@ PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
+# Files whose only job is configuring checks; any change to them needs the user's approval.
+# pyproject.toml is judged per [tool.*] section instead (see guard_edit).
+CONFIG_FILES = frozenset(
+    {
+        ".plainpy.toml", "ruff.toml", ".ruff.toml", "pyrightconfig.json", "complexipy.toml",
+        "tach.toml", "mypy.ini", ".mypy.ini", ".pylintrc", "pylintrc", ".coveragerc",
+    }
+)  # fmt: skip
+
+
 @dataclass(frozen=True)
 class Settings:
     profile: str
@@ -36,6 +46,19 @@ def read_hook_input() -> dict[str, Any]:
 
 def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload))
+
+
+def pre_tool_decision(decision: str, reason: str) -> None:
+    """Answer a PreToolUse hook: "deny" goes back to Claude, "ask" prompts the user."""
+    emit(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": decision,
+                "permissionDecisionReason": reason,
+            }
+        }
+    )
 
 
 def project_dir(hook_input: dict[str, Any]) -> Path:
