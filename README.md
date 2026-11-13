@@ -29,7 +29,7 @@ complexipy are downloaded by `uvx` at the pinned versions in `tools.lock.toml` t
 time they run. If your project has them in `.venv`, those copies are used instead.
 
 ```
-/plugin marketplace add <github-owner>/plainpy
+/plugin marketplace add hugochulp/plainpy
 /plugin install plainpy@plainpy
 ```
 

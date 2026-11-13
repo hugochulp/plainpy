@@ -1,7 +1,7 @@
 {
   "name": "plainpy",
   "description": "Anti-slop guardrails for Python written with Claude Code",
-  "owner": { "name": "plainpy maintainers" },
+  "owner": { "name": "Hugo", "url": "https://github.com/hugochulp" },
   "plugins": [
     {
       "name": "plainpy",
