@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from _common import Settings
-from check_file import Finding, Run, format_report
+from _findings import Finding
+from check_file import Run, format_report
 
 PROJECT = Path("/project")
 RUN = Run(
@@ -18,7 +19,7 @@ RUN = Run(
 
 
 def finding(rule: str, line: int, message: str, value: int | None = None) -> Finding:
-    return Finding(rule, line, message, scope="shipping_cost", text="", value=value)
+    return Finding(rule, line, message, scope="shipping_cost", text="", value=value, file="shipping.py")
 
 
 # The report from the first live run: 13 findings across 6 rules.

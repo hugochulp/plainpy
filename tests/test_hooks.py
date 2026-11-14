@@ -74,9 +74,9 @@ def test_session_start_records_base_and_adds_doctrine(repo: Path) -> None:
     result = start_session(repo)
     output = json.loads(result.stdout)
     assert "plainpy is active (standard profile)" in output["hookSpecificOutput"]["additionalContext"]
-    state_files = list(Path(os.environ["CLAUDE_PLUGIN_DATA"]).glob("projects/*/state.json"))
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True)
-    assert json.loads(state_files[0].read_text())["base"] == head.stdout.strip()
+    state_files = list(Path(os.environ["CLAUDE_PLUGIN_DATA"]).glob("projects/*/sessions/*.json"))
+    tree = subprocess.run(["git", "rev-parse", "HEAD^{tree}"], cwd=repo, capture_output=True, text=True, check=True)
+    assert json.loads(state_files[0].read_text())["base"] == tree.stdout.strip()
 
 
 def test_session_start_is_silent_outside_python_projects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,6 +104,15 @@ def test_existing_complexity_is_not_blamed_on_unrelated_edit(repo: Path) -> None
     app = repo / "app.py"
     app.write_text(app.read_text().replace("return x + 1", "return x + 2"))
     result = edit(app)
+    assert result.returncode == 0, result.stderr
+
+
+def test_renamed_file_keeps_its_old_problems_unblamed(repo: Path) -> None:
+    start_session(repo)
+    moved = repo / "moved.py"
+    (repo / "app.py").rename(moved)  # as a shell `mv` would
+    moved.write_text(moved.read_text().replace("return x + 1", "return x + 2"))
+    result = edit(moved)
     assert result.returncode == 0, result.stderr
 
 

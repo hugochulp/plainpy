@@ -2,7 +2,11 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""SessionStart hook: record the base revision and add the plainpy doctrine to context."""
+"""SessionStart hook: snapshot the working tree as this session's base, record known test
+failures, and add the plainpy doctrine to context.
+
+The base is the working tree as it was when the session started, uncommitted and untracked
+files included, so only what this session changes is judged."""
 
 from __future__ import annotations
 
@@ -10,13 +14,16 @@ from pathlib import Path
 
 from _common import (
     emit,
-    git,
     is_python_project,
     load_settings,
     project_dir,
+    prune_sessions,
     read_hook_input,
-    read_state,
-    write_state,
+    read_json,
+    read_session,
+    save_session,
+    session_id,
+    snapshot,
 )
 
 DOCTRINE = """\
@@ -29,26 +36,14 @@ plainpy is active ({profile} profile). Python you write here is checked after ev
   Never split code into single-use helpers, wrap it in new classes, or add noqa/type: ignore to pass.
 - A suppression comment is refused unless it names the rule and gives a reason after ` -- `.
   Lint config changes and new runtime dependencies need the user's approval.
+- When you finish, the whole change is checked: types, tests, dead code, class design,
+  duplicates and new suppressions. Fix what it reports before finishing.
 Only code you changed is judged; existing problems elsewhere are not your task unless asked."""
 
 
-def default_branch(project: Path) -> str | None:
-    remote_head = git(project, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
-    if remote_head:
-        return remote_head
-    for name in ("main", "master"):
-        if git(project, "rev-parse", "--verify", "--quiet", name):
-            return name
-    return None
-
-
-def find_base_revision(project: Path) -> str | None:
-    head = git(project, "rev-parse", "--verify", "--quiet", "HEAD")
-    if head is None:
-        return None
-    branch = default_branch(project)
-    merge_base = git(project, "merge-base", "HEAD", branch) if branch else None
-    return merge_base or head
+def known_test_failures(project: Path) -> list[str]:
+    """Tests that failed in the last pytest run before this session, so they aren't blamed on it."""
+    return sorted(read_json(project / ".pytest_cache" / "v" / "cache" / "lastfailed"))
 
 
 def main() -> None:
@@ -56,10 +51,10 @@ def main() -> None:
     project = project_dir(hook_input)
     if not is_python_project(project):
         return
-    state = read_state(project)
-    if hook_input.get("source") in {"startup", "clear"} or "base" not in state:
-        state["base"] = find_base_revision(project)
-        write_state(project, state)
+    session = session_id(hook_input)
+    if hook_input.get("source") in {"startup", "clear"} or "base" not in read_session(project, session):
+        save_session(project, session, {"base": snapshot(project), "test_baseline": known_test_failures(project)})
+        prune_sessions(project)
     settings = load_settings(project)
     emit(
         {

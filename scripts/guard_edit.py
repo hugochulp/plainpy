@@ -24,7 +24,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from _common import CONFIG_FILES, pre_tool_decision, read_hook_input
+from _common import CONFIG_FILES, PYTHON_SUFFIXES, pre_tool_decision, read_hook_input
 
 FILE_WIDE = re.compile(
     r"#\s*(ruff:\s*noqa|flake8:\s*noqa|mypy:\s*ignore-errors|pylint:\s*skip-file|pyright:\s*basic)", re.IGNORECASE
@@ -84,9 +84,14 @@ def suppression_problem(comment: str) -> str | None:
     return None
 
 
-def suppression_problems(before: str, after: str) -> list[str]:
+def added_suppressions(before: str, after: str) -> list[str]:
+    """Suppression comments in `after` that were not in `before`."""
     added = Counter(comments(after)) - Counter(comments(before))
-    return [problem for comment in added.elements() if (problem := suppression_problem(comment))]
+    return [comment for comment in added.elements() if FILE_WIDE.search(comment) or LINE_LEVEL.search(comment)]
+
+
+def suppression_problems(before: str, after: str) -> list[str]:
+    return [problem for comment in added_suppressions(before, after) if (problem := suppression_problem(comment))]
 
 
 def parse_toml(text: str) -> dict[str, Any] | None:
@@ -139,11 +144,11 @@ def main() -> None:
     if not file_path:
         return
     path = Path(file_path)
-    before = path.read_text() if path.is_file() else ""
+    before = path.read_text(errors="replace") if path.is_file() else ""
     after = after_edit(tool_input, before)
     if after is None:
         return
-    problems = suppression_problems(before, after) if path.suffix in {".py", ".pyi"} else []
+    problems = suppression_problems(before, after) if path.suffix in PYTHON_SUFFIXES else []
     if problems:
         pre_tool_decision("deny", "plainpy: " + " ".join(problems))
         return

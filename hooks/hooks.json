@@ -1,5 +1,5 @@
 {
-  "description": "plainpy: record the base revision at session start; block new suppressions and ask before config or dependency changes; lint and complexity-check every edited Python file.",
+  "description": "plainpy: record the base revision at session start; block new suppressions and ask before config or dependency changes; lint and complexity-check every edited Python file; check the whole change when Claude finishes.",
   "hooks": {
     "PreToolUse": [
       {
@@ -31,6 +31,29 @@
             "type": "command",
             "command": "uv run --quiet --script \"${CLAUDE_PLUGIN_ROOT}/scripts/session_start.py\"",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --quiet --script \"${CLAUDE_PLUGIN_ROOT}/scripts/prompt_flags.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --quiet --script \"${CLAUDE_PLUGIN_ROOT}/scripts/gate.py\"",
+            "timeout": 240,
+            "statusMessage": "plainpy: checking the whole change"
           }
         ]
       }

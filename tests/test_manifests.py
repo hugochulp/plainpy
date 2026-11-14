@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
 import tomllib
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def load(relative: str) -> dict[str, object]:
+def load(relative: str) -> dict[str, Any]:
     return json.loads((ROOT / relative).read_text())
 
 
@@ -29,5 +31,5 @@ def test_hook_scripts_exist() -> None:
 
 def test_every_tool_is_pinned() -> None:
     lock = tomllib.loads((ROOT / "tools.lock.toml").read_text())["tools"]
-    assert set(lock) == {"ruff", "complexipy"}
-    assert all(version.count(".") == 2 for version in lock.values())
+    assert set(lock) == {"ruff", "complexipy", "basedpyright", "pylint", "vulture", "deptry"}
+    assert all(re.fullmatch(r"\d+\.\d+(\.\d+)?", version) for version in lock.values())

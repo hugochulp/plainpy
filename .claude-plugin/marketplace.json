@@ -7,7 +7,7 @@
       "name": "plainpy",
       "source": "./",
       "description": "Per-edit Ruff and cognitive-complexity gates that judge only what Claude changed.",
-      "version": "0.2.0"
+      "version": "0.3.0"
     }
   ]
 }

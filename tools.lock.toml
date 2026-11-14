@@ -4,3 +4,11 @@
 [tools]
 ruff = "0.17.5"
 complexipy = "9.0.0"
+basedpyright = "1.40.2"
+pylint = "4.1.3"
+vulture = "2.16"
+deptry = "0.25.1"
+
+# Interpreter uvx runs the Python-based tools on, so they can parse modern syntax.
+[python]
+version = "3.13"

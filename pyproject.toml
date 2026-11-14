@@ -28,3 +28,7 @@ max-positional-args = 5
 max-branches = 10
 max-returns = 6
 max-statements = 40
+
+[tool.basedpyright]
+# Hook scripts run as standalone scripts and import their siblings (`from _common import ...`).
+extraPaths = ["scripts"]
