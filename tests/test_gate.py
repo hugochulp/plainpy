@@ -196,6 +196,8 @@ def test_awkward_files_do_not_crash_the_check(repo: Path, tmp_path: Path) -> Non
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "link")
     start(repo)
+    (tmp_path / "elsewhere.py").write_text("VALUE = 1\n")
+    (repo / "src" / "demo" / "linked.py").symlink_to(tmp_path / "elsewhere.py")  # a .py link out of the repo
     (repo / "src" / "demo" / "legacy_text.py").write_bytes(b"# -*- coding: latin-1 -*-\nNAME = '\xe9'\n")
     unreachable = "def first() -> int:\n    return 1\n    print('x')\n"
     (repo / "src" / "demo" / "dead.py").write_text(unreachable + "\n\n" + unreachable.replace("first", "second"))
@@ -212,8 +214,25 @@ def test_duplicates_already_in_the_base_are_not_blamed(repo: Path) -> None:
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "duplicated modules")
     start(repo)
-    (repo / "src" / "demo" / "z_new.py").write_text("LIMIT = 3\n")
+    (repo / "src" / "demo" / "z_new.py").write_text("LIMIT = 3\n")  # pylint now reports on another file
+    (repo / "src" / "demo" / "c_mod.py").rename(repo / "src" / "demo" / "a_mod.py")  # and module names change
     assert "decision" not in stop()
+
+
+def test_a_class_that_grows_is_reported(repo: Path) -> None:
+    fields = "".join(f"        self.f{n} = {n}\n" for n in range(8))
+    big = (
+        f"class Big:\n    def __init__(self) -> None:\n{fields}\n    def total(self) -> int:\n        return self.f0\n"
+    )
+    (repo / "src" / "demo" / "big.py").write_text(big)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "a class with 8 attributes")
+    start(repo)
+    grown = big.replace("        self.f7 = 7\n", "        self.f7 = 7\n        self.f8 = 8\n")
+    (repo / "src" / "demo" / "big.py").write_text(grown)
+    reason = stop()["reason"]
+    assert "R0902 Too many instance attributes (9/7)" in reason
+    assert "R0903" not in reason  # unchanged since the base
 
 
 def test_known_failing_tests_are_not_blamed(repo: Path, shared_venv: Path) -> None:
@@ -231,7 +250,19 @@ def test_known_failing_tests_are_not_blamed(repo: Path, shared_venv: Path) -> No
     (cache / "lastfailed").write_text(json.dumps(known))
     start(repo)
     calc(repo).write_text(calc(repo).read_text().replace("return a - b", "return -b + a"))
+    (repo / "tests" / "test_spaces.py").rename(repo / "tests" / "test_text.py")  # known failure, new file name
     assert "decision" not in stop()
+
+
+def test_pytest_without_a_summary_is_not_a_pass(repo: Path, shared_venv: Path) -> None:
+    (repo / ".venv").symlink_to(shared_venv)
+    (repo / "pyproject.toml").write_text(PYPROJECT + 'addopts = "--no-summary"\n')
+    git(repo, "commit", "-qam", "no summary")
+    start(repo)
+    calc(repo).write_text(CALC.replace("a + b", "a - b"))
+    outcome = stop()
+    assert "decision" not in outcome
+    assert "listed no failures" in outcome["systemMessage"]
 
 
 def test_gives_up_when_the_same_problems_come_back(repo: Path) -> None:
@@ -322,6 +353,26 @@ def test_a_tool_that_fails_is_reported_and_checked_again(repo: Path) -> None:
     assert "basedpyright failed" in stop()["systemMessage"]  # not marked clean, so it runs again
 
 
+def test_an_incomplete_block_is_checked_again(repo: Path) -> None:
+    broken = repo / ".venv" / "bin" / "basedpyright"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("#!/bin/sh\nexit 3\n")
+    broken.chmod(0o755)
+    start(repo)
+    calc(repo).write_text(CALC + PROBLEMS)
+    assert stop()["decision"] == "block"
+    assert "changed nothing since it asked" in stop(again=True)["systemMessage"]
+    assert stop()["decision"] == "block"  # basedpyright never ran, so the next turn checks again
+
+
+def test_each_session_keeps_its_own_base(repo: Path) -> None:
+    start(repo)
+    calc(repo).write_text(CALC + PROBLEMS)
+    hook("session_start.py", {"source": "startup", "cwd": str(repo), "session_id": "s2"})
+    assert hook("gate.py", {"session_id": "s2", "stop_hook_active": False}) == {}  # s2 started after the edit
+    assert stop()["decision"] == "block"  # s1 still judges it
+
+
 def test_a_base_that_cannot_be_checked_never_blocks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     pre_existing = Finding("unused-function", 3, "'old'", "", "'old'", file="m.py")
     check = gate.TreeCheck("Dead code (vulture)", "vulture", lambda *_: [pre_existing])
@@ -329,7 +380,7 @@ def test_a_base_that_cannot_be_checked_never_blocks(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(gate, "python_files_in", lambda *_: ["m.py"])
     monkeypatch.setattr(gate, "base_findings", lambda *_: {"dead code": ToolError("vulture timed out after 150 s")})
     settings = Settings(profile="standard", blocking=True, cognitive_max=15, mccabe_max=10)
-    change = gate.Change(tmp_path, tmp_path, "b", "c", settings, ["m.py"], {}, frozenset())
+    change = gate.Change(tmp_path, tmp_path, ".", "b", "c", settings, ["m.py"], {}, frozenset())
     [section] = gate.tree_sections(change, tmp_path)
     assert section.findings == []
     assert not section.blocking

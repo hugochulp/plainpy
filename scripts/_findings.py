@@ -11,6 +11,7 @@ import ast
 import subprocess
 from collections import Counter
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
 MAX_ROWS_LISTED = 6
@@ -62,7 +63,7 @@ class Finding:
 
 
 def run_tool(
-    args: list[str], cwd: Path, stdin: str | None = None, timeout: float | None = None
+    args: list[str], cwd: Path, stdin: str | None = None, *, timeout: float
 ) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
@@ -80,6 +81,7 @@ def is_test_file(path: Path) -> bool:
     return in_tests_dir or name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py"
 
 
+@cache  # the finish check locates many findings in the same file
 def scope_spans(source: str) -> list[tuple[int, int, str]]:
     """(first line, last line, qualified name) for every function and class."""
     try:

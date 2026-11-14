@@ -11,6 +11,7 @@ import sys
 import tempfile
 import tomllib
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ DEFAULT_MAX_GATE_BLOCKS = 3
 KEPT_SESSIONS = 20
 # Folders never analysed or snapshotted: virtualenvs, build output, caches.
 SKIP_DIRS = frozenset({".venv", "venv", "env", "node_modules", "build", "dist", "__pycache__", ".git", ".tox", ".nox"})
+PYTHON_SUFFIXES = (".py", ".pyi")
 # Untracked files bigger than this are left out of snapshots (data dumps, binaries).
 MAX_SNAPSHOT_FILE_BYTES = 1_000_000
 
@@ -105,11 +107,17 @@ def session_id(hook_input: dict[str, Any]) -> str:
     return str(hook_input.get("session_id") or "default")
 
 
-def state_path(project: Path) -> Path:
+def project_data(project: Path) -> Path:
+    """plainpy's own folder for this project, outside the project itself."""
     data_dir = os.environ.get("CLAUDE_PLUGIN_DATA")
     root = Path(data_dir) if data_dir else Path.home() / ".cache" / "plainpy"
-    digest = hashlib.sha256(str(project).encode()).hexdigest()[:16]
-    return root / "projects" / digest / "state.json"
+    return root / "projects" / hashlib.sha256(str(project).encode()).hexdigest()[:16]
+
+
+def session_path(project: Path, session: str) -> Path:
+    """One small file per session: only that session's hooks write it, one after another."""
+    name = hashlib.sha256(session.encode()).hexdigest()[:16]
+    return project_data(project) / "sessions" / f"{name}.json"
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -128,16 +136,18 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
 
 
 def read_session(project: Path, session: str) -> dict[str, Any]:
-    return read_json(state_path(project)).get("sessions", {}).get(session, {})
+    return read_json(session_path(project, session))
 
 
 def save_session(project: Path, session: str, values: dict[str, Any]) -> None:
-    """Store one session's state. Re-reads the file first so other sessions' updates survive."""
-    path = state_path(project)
-    sessions = read_json(path).get("sessions", {})
-    sessions.pop(session, None)
-    sessions[session] = values
-    write_json(path, {"sessions": dict(list(sessions.items())[-KEPT_SESSIONS:])})
+    write_json(session_path(project, session), values)
+
+
+def prune_sessions(project: Path) -> None:
+    """Keep the most recently used session files."""
+    files = sorted((project_data(project) / "sessions").glob("*.json"), key=lambda f: f.stat().st_mtime)
+    for old in files[:-KEPT_SESSIONS]:
+        old.unlink(missing_ok=True)
 
 
 def git_raw(cwd: Path, *args: str, env: dict[str, str] | None = None, stdin: str | None = None) -> str | None:
@@ -159,6 +169,39 @@ def git(cwd: Path, *args: str, env: dict[str, str] | None = None, stdin: str | N
 def repo_top(project: Path) -> Path | None:
     top = git(project, "rev-parse", "--show-toplevel")
     return Path(top).resolve() if top else None
+
+
+def inside(prefix: str, path: str) -> str | None:
+    """A repo-relative path made relative to the project folder; None if it is outside."""
+    if prefix == ".":
+        return path
+    return path[len(prefix) + 1 :] if path.startswith(f"{prefix}/") else None
+
+
+def pathspec(prefix: str) -> list[str]:
+    return [] if prefix == "." else ["--", prefix]
+
+
+def compare(top: Path, prefix: str, base: str, current: str) -> tuple[list[str], dict[str, str]]:
+    """(project-relative paths that differ, renamed files as {new path: old path}, both project-relative)."""
+    args = ["diff", "--no-ext-diff", "--name-status", "-z", "-M", base, current, *pathspec(prefix)]
+    fields = (git_raw(top, *args) or "").split("\0")
+    files, renamed = [], {}
+    position = 0
+    while position + 1 < len(fields):
+        status, path = fields[position], fields[position + 1]
+        position += 2
+        old = None
+        if status.startswith(("R", "C")):
+            old, path = path, fields[position]
+            position += 1
+        name = inside(prefix, path)
+        if name is None:
+            continue
+        files.append(name)
+        if old is not None and status.startswith("R") and (old_name := inside(prefix, old)):
+            renamed[name] = old_name
+    return sorted(files), renamed
 
 
 def snapshot(project: Path) -> str | None:
@@ -193,6 +236,7 @@ def snapshot(project: Path) -> str | None:
         return git(top, "write-tree", env=env)
 
 
+@cache
 def tool_command(tool: str, project: Path) -> list[str]:
     """Prefer the project's own copy of a tool; else the pinned version via uvx."""
     local = project / ".venv" / "bin" / tool

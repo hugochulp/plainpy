@@ -10,7 +10,6 @@ files included, so only what this session changes is judged."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from _common import (
@@ -18,7 +17,9 @@ from _common import (
     is_python_project,
     load_settings,
     project_dir,
+    prune_sessions,
     read_hook_input,
+    read_json,
     read_session,
     save_session,
     session_id,
@@ -42,11 +43,7 @@ Only code you changed is judged; existing problems elsewhere are not your task u
 
 def known_test_failures(project: Path) -> list[str]:
     """Tests that failed in the last pytest run before this session, so they aren't blamed on it."""
-    last_failed = project / ".pytest_cache" / "v" / "cache" / "lastfailed"
-    try:
-        return sorted(json.loads(last_failed.read_text()))
-    except (OSError, ValueError):
-        return []
+    return sorted(read_json(project / ".pytest_cache" / "v" / "cache" / "lastfailed"))
 
 
 def main() -> None:
@@ -57,6 +54,7 @@ def main() -> None:
     session = session_id(hook_input)
     if hook_input.get("source") in {"startup", "clear"} or "base" not in read_session(project, session):
         save_session(project, session, {"base": snapshot(project), "test_baseline": known_test_failures(project)})
+        prune_sessions(project)
     settings = load_settings(project)
     emit(
         {

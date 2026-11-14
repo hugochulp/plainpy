@@ -24,7 +24,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from _common import CONFIG_FILES, pre_tool_decision, read_hook_input
+from _common import CONFIG_FILES, PYTHON_SUFFIXES, pre_tool_decision, read_hook_input
 
 FILE_WIDE = re.compile(
     r"#\s*(ruff:\s*noqa|flake8:\s*noqa|mypy:\s*ignore-errors|pylint:\s*skip-file|pyright:\s*basic)", re.IGNORECASE
@@ -148,7 +148,7 @@ def main() -> None:
     after = after_edit(tool_input, before)
     if after is None:
         return
-    problems = suppression_problems(before, after) if path.suffix in {".py", ".pyi"} else []
+    problems = suppression_problems(before, after) if path.suffix in PYTHON_SUFFIXES else []
     if problems:
         pre_tool_decision("deny", "plainpy: " + " ".join(problems))
         return

@@ -16,21 +16,26 @@ import json
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
 from _common import (
+    PYTHON_SUFFIXES,
     Settings,
+    compare,
     emit,
+    git,
     git_raw,
     load_settings,
+    pathspec,
     project_dir,
     read_hook_input,
     read_session,
     repo_top,
     session_id,
+    snapshot,
     tool_command,
 )
 from _findings import (
@@ -65,6 +70,8 @@ IGNORED_IN_TESTS = ("S101", "S105", "S106", "ANN", "ARG", "PLR2004")
 IGNORED_IN_INIT = ("F401",)
 METRIC = re.compile(r"\((\d+) > (\d+)\)")
 MAX_SHOWN = 20
+# Per tool call. Ruff takes milliseconds; this only bounds a hang, well inside the hook's 60 s.
+TOOL_TIMEOUT = 15
 
 
 @dataclass(frozen=True)
@@ -75,12 +82,18 @@ class Run:
     ruff: list[str]
     complexipy: list[str]
     base: str | None = None  # the session's base snapshot (a git tree)
-    base_name: str | None = None  # the file's repo-relative path in the base, if it was renamed
+    base_name: str | None = None  # the file's project-relative path in the base, if it was renamed
+    top: Path | None = None  # the repository root
+
+    @property
+    def real_path(self) -> Path:
+        """The path with its folders resolved, but not the file itself, so a symlink stays where it is."""
+        return self.path.parent.resolve() / self.path.name
 
     @property
     def shown_path(self) -> str:
         try:
-            return self.path.resolve().relative_to(self.project).as_posix()
+            return self.real_path.relative_to(self.project).as_posix()
         except ValueError:
             return str(self.path)
 
@@ -90,7 +103,7 @@ def edited_python_file(hook_input: dict[str, Any]) -> Path | None:
     if not file_path:
         return None
     path = Path(file_path)
-    return path if path.suffix in {".py", ".pyi"} and path.is_file() else None
+    return path if path.suffix in PYTHON_SUFFIXES and path.is_file() else None
 
 
 def ruff_options(settings: Settings) -> list[str]:
@@ -106,14 +119,14 @@ def autofix(run: Run) -> None:
     import one edit before the code that uses it."""
     target = str(run.path)
     fix = [*run.ruff, "check", *ruff_options(run.settings), "--fix", "--unfixable", "F401"]
-    run_tool([*fix, "--force-exclude", "--quiet", "--exit-zero", target], run.project)
-    run_tool([*run.ruff, "format", "--force-exclude", "--quiet", target], run.project)
+    run_tool([*fix, "--force-exclude", "--quiet", "--exit-zero", target], run.project, timeout=TOOL_TIMEOUT)
+    run_tool([*run.ruff, "format", "--force-exclude", "--quiet", target], run.project, timeout=TOOL_TIMEOUT)
 
 
 def ruff_findings(run: Run, source: str, *, per_edit: bool) -> list[Finding]:
     args = [*run.ruff, "check", *ruff_options(run.settings), "--no-fix", "--force-exclude"]
     args += ["--output-format", "json", "--stdin-filename", str(run.path), "-"]
-    result = run_tool(args, run.project, stdin=source)
+    result = run_tool(args, run.project, stdin=source, timeout=TOOL_TIMEOUT)
     if result.returncode not in {0, 1}:
         raise ToolError(f"ruff failed: {result.stderr.strip()[:500]}")
     spans, lines = scope_spans(source), source.splitlines()
@@ -140,7 +153,7 @@ def complexity_findings(run: Run, source: str, workdir: Path) -> list[Finding]:
     target, output = workdir / run.path.name, workdir / "complexipy.json"
     target.write_text(source)
     args = [*run.complexipy, str(target), "--output-format", "json", "--output", str(output)]
-    run_tool([*args, "--quiet", "--cache-dir", str(workdir / "cache")], workdir)
+    run_tool([*args, "--quiet", "--cache-dir", str(workdir / "cache")], workdir, timeout=TOOL_TIMEOUT)
     if not output.exists():
         raise ToolError("complexipy produced no output")
     limit = run.settings.cognitive_max
@@ -165,11 +178,26 @@ def collect(run: Run, source: str, workdir: Path, *, per_edit: bool) -> list[Fin
 
 
 def base_source(run: Run) -> str | None:
-    top = repo_top(run.project) if run.base else None
-    if top is None:
+    if run.base is None or run.top is None:
         return None
-    name = run.base_name or run.path.resolve().relative_to(top).as_posix()
-    return git_raw(top, "show", f"{run.base}:{name}")
+    path = run.project / run.base_name if run.base_name else run.real_path
+    try:
+        name = path.relative_to(run.top).as_posix()
+    except ValueError:  # outside the repository
+        return None
+    return git_raw(run.top, "show", f"{run.base}:{name}")
+
+
+def renamed_from(run: Run) -> str | None:
+    """The file's project-relative path in the base, if this session renamed it (e.g. by a shell `mv`)."""
+    if run.base is None or run.top is None:
+        return None
+    prefix = run.project.relative_to(run.top).as_posix()
+    deleted = git(run.top, "diff-index", "--name-only", "--diff-filter=D", run.base, *pathspec(prefix))
+    if not deleted:  # nothing from the base is missing, so nothing was renamed: skip the snapshot
+        return None
+    current = snapshot(run.project)
+    return compare(run.top, prefix, run.base, current)[1].get(run.shown_path) if current else None
 
 
 def findings_since_base(run: Run, *, per_edit: bool) -> list[Finding]:
@@ -207,7 +235,9 @@ def main() -> int:
     project = project_dir(hook_input)
     base = read_session(project, session_id(hook_input)).get("base")
     ruff, complexipy = tool_command("ruff", project), tool_command("complexipy", project)
-    run = Run(path, project, load_settings(project), ruff, complexipy, base)
+    run = Run(path, project, load_settings(project), ruff, complexipy, base, top=repo_top(project))
+    if base and base_source(run) is None:  # a new file, or one renamed this session
+        run = replace(run, base_name=renamed_from(run))
     try:
         findings = check(run)
     except ToolError as err:

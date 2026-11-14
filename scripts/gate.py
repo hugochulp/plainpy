@@ -35,13 +35,18 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from _common import (
+    PYTHON_SUFFIXES,
     SKIP_DIRS,
     Settings,
+    compare,
     emit,
     git,
     git_raw,
+    inside,
     is_python_project,
     load_settings,
+    pathspec,
+    project_data,
     project_dir,
     read_hook_input,
     read_json,
@@ -50,7 +55,6 @@ from _common import (
     save_session,
     session_id,
     snapshot,
-    state_path,
     tool_command,
     write_json,
 )
@@ -77,7 +81,9 @@ VULTURE_KINDS = ("unused function", "unused class", "unused method", "unused pro
 VULTURE_LINE = re.compile(
     r"^(?P<file>.+?):(?P<line>\d+): (?P<kind>unused \w+|unreachable code)(?P<what>.*?) \(\d+% confidence"
 )
-LINE_RANGE = re.compile(r"\[\d+:\d+\]")
+# Class-size messages carry the measured count, e.g. "Too many instance attributes (9/7)".
+SIZE_RULES = {"R0901", "R0902"}
+COUNT = re.compile(r"\((\d+)/\d+\)")
 FAILED_TEST = re.compile(r"^(?:FAILED|ERROR) (?P<test>.+?)(?: - .*)?$", re.MULTILINE)
 
 # Without the project's .venv, basedpyright can't see installed packages, so these say more
@@ -97,22 +103,22 @@ DEAD_CODE_HINT = (
 class Change:
     project: Path
     top: Path  # the repository root
+    prefix: str  # the project's folder inside the repository, "." at the root
     base: str  # git tree: the working tree when the session started
     current: str  # git tree: the working tree now
     settings: Settings
     files: list[str]  # project-relative paths that differ from the base
-    renamed: dict[str, str]  # project-relative new path -> repo-relative path in the base
+    renamed: dict[str, str]  # renamed files: {new path: old path}, both project-relative
     baseline_failures: frozenset[str]
 
     @property
-    def prefix(self) -> str:
-        """The project's folder inside the repository, "." at the root."""
-        return self.project.resolve().relative_to(self.top).as_posix()
+    def moved(self) -> dict[str, str]:
+        """Renamed files as {old project path: new project path}."""
+        return {old: new for new, old in self.renamed.items()}
 
     @property
-    def python_files(self) -> list[Path]:
-        paths = (self.project / name for name in self.files if name.endswith((".py", ".pyi")))
-        return [path for path in paths if path.is_file()]
+    def python_files(self) -> list[str]:
+        return [name for name in self.files if name.endswith(PYTHON_SUFFIXES) and (self.project / name).is_file()]
 
 
 @dataclass
@@ -132,39 +138,6 @@ def failed(title: str, reason: object) -> Section:
 # --- the change -------------------------------------------------------------------------
 
 
-def inside(prefix: str, path: str) -> str | None:
-    """A repo-relative path made relative to the project folder; None if it is outside."""
-    if prefix == ".":
-        return path
-    return path[len(prefix) + 1 :] if path.startswith(f"{prefix}/") else None
-
-
-def pathspec(prefix: str) -> list[str]:
-    return [] if prefix == "." else ["--", prefix]
-
-
-def compare(top: Path, prefix: str, base: str, current: str) -> tuple[list[str], dict[str, str]]:
-    """(project-relative paths that differ, renamed files as {new project path: old repo path})."""
-    args = ["diff", "--no-ext-diff", "--name-status", "-z", "-M", base, current, *pathspec(prefix)]
-    fields = (git_raw(top, *args) or "").split("\0")
-    files, renamed = [], {}
-    position = 0
-    while position + 1 < len(fields):
-        status, path = fields[position], fields[position + 1]
-        position += 2
-        old = None
-        if status.startswith(("R", "C")):
-            old, path = path, fields[position]
-            position += 1
-        name = inside(prefix, path)
-        if name is None:
-            continue
-        files.append(name)
-        if old is not None and status.startswith("R"):
-            renamed[name] = old
-    return sorted(files), renamed
-
-
 def skipped(name: str) -> bool:
     folders = PurePosixPath(name).parts[:-1]
     return any(part in SKIP_DIRS or part.startswith(".") for part in folders)
@@ -174,7 +147,7 @@ def python_files_in(change: Change, tree: str) -> list[str]:
     """Project-relative Python files in a snapshot: what git sees, so ignored files never count."""
     listed = git_raw(change.top, "ls-tree", "-r", "-z", "--name-only", tree, *pathspec(change.prefix)) or ""
     names = (inside(change.prefix, name) for name in listed.split("\0") if name)
-    return sorted(name for name in names if name and name.endswith((".py", ".pyi")) and not skipped(name))
+    return sorted(name for name in names if name and name.endswith(PYTHON_SUFFIXES) and not skipped(name))
 
 
 def extract_base_tree(change: Change, dest: Path) -> Path:
@@ -241,11 +214,16 @@ def plain_class(source: str, line: int) -> bool:
 
 
 def pylint_finding(root: Path, message: dict[str, Any]) -> Finding:
-    if message["messageId"] != "R0801":
-        return finding_at(root, message["path"], message["line"], message["messageId"], message["message"])
-    # Duplicates are reported on whichever file pylint read last, so the key leaves the file out.
-    summary = " ".join(message["message"].splitlines()[:3])
-    return Finding("R0801", 0, summary, "", LINE_RANGE.sub("", message["message"]))
+    rule, text = message["messageId"], message["message"]
+    if rule == "R0801":
+        # The key is the duplicated code and how many files share it: not which file pylint
+        # reported it on, nor module names that change when a file is renamed.
+        lines = text.splitlines()
+        code = "\n".join([lines[0], *(line for line in lines[1:] if not line.startswith("=="))])
+        return Finding("R0801", 0, " ".join(lines[:3]), "", code)
+    finding = finding_at(root, message["path"], message["line"], rule, text)
+    count = COUNT.search(text) if rule in SIZE_RULES else None
+    return replace(finding, value=int(count[1])) if count else finding  # new only if the count went up
 
 
 def design_in(root: Path, files: list[str], change: Change) -> list[Finding]:
@@ -345,7 +323,7 @@ def recent_bases(stored: dict[str, Any], base: str) -> dict[str, Any]:
 
 def base_findings(change: Change, workdir: Path) -> dict[str, list[Finding] | ToolError]:
     """Each tree check's findings at the base, from cache or by running it there."""
-    cache_file = state_path(change.project).with_name("base-cache.json")
+    cache_file = project_data(change.project) / "base-cache.json"
     stored = recent_bases(read_json(cache_file), change.base)
     keys = {name: base_cache_key(name, change) for name in TREE_CHECKS}
     missing = [name for name, key in keys.items() if key not in stored]
@@ -376,24 +354,24 @@ def base_findings(change: Change, workdir: Path) -> dict[str, list[Finding] | To
 # --- checks on the change only ------------------------------------------------------------
 
 
-def run_for(change: Change, path: Path) -> Run:
-    name = path.relative_to(change.project).as_posix()
+def run_for(change: Change, name: str) -> Run:
     ruff, complexipy = tool_command("ruff", change.project), tool_command("complexipy", change.project)
-    return Run(path, change.project, change.settings, ruff, complexipy, change.base, change.renamed.get(name))
+    path, old_name = change.project / name, change.renamed.get(name)
+    return Run(path, change.project, change.settings, ruff, complexipy, change.base, old_name, change.top)
 
 
 def lint_and_complexity(change: Change) -> list[Finding]:
     with ThreadPoolExecutor() as pool:
-        found = pool.map(lambda path: findings_since_base(run_for(change, path), per_edit=False), change.python_files)
+        found = pool.map(lambda name: findings_since_base(run_for(change, name), per_edit=False), change.python_files)
         return [finding for findings in found for finding in findings]
 
 
 def suppressions(change: Change) -> tuple[list[Finding], list[Finding]]:
     """(suppressions that break the rules, suppressions with a reason for the user to review)."""
     bad, reasoned = [], []
-    for path in change.python_files:
-        run = run_for(change, path)
-        after = path.read_text(errors="replace")
+    for name in change.python_files:
+        run = run_for(change, name)
+        after = run.path.read_text(errors="replace")
         for comment in added_suppressions(base_source(run) or "", after):
             line = next((n for n, text in enumerate(after.splitlines(), 1) if comment in text), 0)
             problem = suppression_problem(comment)
@@ -408,10 +386,18 @@ def suppressions(change: Change) -> tuple[list[Finding], list[Finding]]:
 def failing_tests(change: Change, pytest: Path) -> list[Finding]:
     args = [str(pytest), "-q", "-rfE", "-p", "no:cacheprovider"]
     result = run_tool(args, change.project, timeout=TOOL_TIMEOUT)
-    if result.returncode not in {0, 1, 2, 5}:
-        raise ToolError(f"pytest failed to run: {result.stdout.strip()[-300:]}")
     failed_now = {test.strip() for test in FAILED_TEST.findall(result.stdout)}
-    return [Finding("failed", 0, "", "", test, file=test) for test in sorted(failed_now - change.baseline_failures)]
+    if result.returncode not in {0, 5} and not failed_now:  # 5: no tests collected
+        raise ToolError(f"pytest exited with {result.returncode} but listed no failures: {result.stdout[-300:]}")
+    moved = change.moved
+    known = {moved_test(test, moved) for test in change.baseline_failures}
+    return [Finding("failed", 0, "", "", test, file=test) for test in sorted(failed_now - known)]
+
+
+def moved_test(test: str, moved: dict[str, str]) -> str:
+    """A test id from before the session, with its file renamed if the session moved it."""
+    file, separator, name = test.partition("::")
+    return moved.get(file, file) + separator + name
 
 
 # --- running everything ---------------------------------------------------------------------
@@ -422,8 +408,7 @@ def tree_sections(change: Change, workdir: Path) -> list[Section]:
     with ThreadPoolExecutor() as pool:
         current = {name: pool.submit(check.run, change.project, files, change) for name, check in TREE_CHECKS.items()}
         base = base_findings(change, workdir)
-    moved = {old: new for new, path in change.renamed.items() if (old := inside(change.prefix, path))}
-    no_venv = not (change.project / ".venv").exists()
+    no_venv, moved = not (change.project / ".venv").exists(), change.moved
     sections = []
     for name, future in current.items():
         check, previous = TREE_CHECKS[name], base[name]
@@ -454,11 +439,15 @@ def run_checks(change: Change) -> list[Section]:
         tree = pool.submit(tree_sections, change, Path(tmp))
         lint = pool.submit(guarded, "Lint and complexity", lambda: lint_and_complexity(change))
         tests = pool.submit(guarded, "Tests (pytest)", lambda: failing_tests(change, pytest), TESTS_HINT)
-        bad, reasoned = suppressions(change)
+        try:
+            bad, reasoned = suppressions(change)
+            flagged = Section("Suppressions", bad, SUPPRESSION_HELP)
+        except CHECK_ERRORS as err:
+            reasoned, flagged = [], failed("Suppressions", err)
         no_tests = Section("Tests (pytest)", [], blocking=False, notes=[NO_PYTEST_NOTE])
         return [
             lint.result(),
-            Section("Suppressions", bad, SUPPRESSION_HELP),
+            flagged,
             tests.result() if pytest.exists() else no_tests,
             *tree.result(),
             Section("New suppressions with a reason, for review", reasoned, blocking=False),
@@ -528,21 +517,24 @@ def finish_check(project: Path, session: dict[str, Any], hook_input: dict[str, A
                 "check starts over from the files as they are now."}  # fmt: skip
     settings = load_settings(project)
     digest = f"{base}|{current}|{settings}"
-    files, renamed = compare(top, project.resolve().relative_to(top).as_posix(), base, current)
+    prefix = project.relative_to(top).as_posix()
+    files, renamed = compare(top, prefix, base, current)
     if digest == session.get("clean_digest") or all(name.endswith(DOC_SUFFIXES) for name in files):
         session["clean_digest"] = digest
         return None
     blocked = session.get("blocked") or {}
     if hook_input.get("stop_hook_active") and blocked.get("digest") == digest:
-        session["clean_digest"] = digest
+        if blocked.get("complete"):
+            session["clean_digest"] = digest
         problems = blocked["report"].split("\n", 1)[-1]
         return {"systemMessage": f"plainpy stopped asking because Claude changed nothing since it asked:\n{problems}"}
     baseline = frozenset(session.get("test_baseline", []))
-    sections = run_checks(Change(project, top, base, current, settings, files, renamed, baseline))
+    sections = run_checks(Change(project, top, prefix, base, current, settings, files, renamed, baseline))
     outcome = decide(sections, session, hook_input, settings)
+    complete = not any(section.incomplete for section in sections)
     if outcome and "decision" in outcome:
-        session["blocked"] = {"digest": digest, "report": outcome["reason"]}
-    elif not any(section.incomplete for section in sections):
+        session["blocked"] = {"digest": digest, "report": outcome["reason"], "complete": complete}
+    elif complete:
         session["clean_digest"] = digest
     return outcome
 
