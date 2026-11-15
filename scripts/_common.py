@@ -18,9 +18,9 @@ from typing import Any
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 
 PROFILES: dict[str, dict[str, Any]] = {
-    "lenient": {"blocking": False, "cognitive_max": 25, "mccabe_max": 15, "type_warnings": False},
-    "standard": {"blocking": True, "cognitive_max": 15, "mccabe_max": 10, "type_warnings": False},
-    "strict": {"blocking": True, "cognitive_max": 10, "mccabe_max": 8, "type_warnings": True},
+    "lenient": {"blocking": False, "cognitive_max": 25, "mccabe_max": 15, "type_warnings": False, "class_budget": 6},
+    "standard": {"blocking": True, "cognitive_max": 15, "mccabe_max": 10, "type_warnings": False, "class_budget": 3},
+    "strict": {"blocking": True, "cognitive_max": 10, "mccabe_max": 8, "type_warnings": True, "class_budget": 2},
 }
 DEFAULT_MAX_GATE_BLOCKS = 3
 KEPT_SESSIONS = 20
@@ -50,6 +50,7 @@ class Settings:
     mccabe_max: int
     type_warnings: bool = False
     max_gate_blocks: int = DEFAULT_MAX_GATE_BLOCKS
+    class_budget: int = 3  # new classes per session (SLP006)
 
 
 def read_hook_input() -> dict[str, Any]:
@@ -100,6 +101,7 @@ def load_settings(project: Path) -> Settings:
         mccabe_max=int(values["mccabe_max"]),
         type_warnings=bool(values["type_warnings"]),
         max_gate_blocks=int(values["max_gate_blocks"]),
+        class_budget=int(values["class_budget"]),
     )
 
 

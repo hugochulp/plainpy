@@ -46,7 +46,11 @@ The hook prints the file, line, rule and limit. Fix the cause:
 | Too many statements (PLR0915) | Remove what the task does not need, then extract a step only if it has a name and a second use | Chop the function into numbered steps |
 | Type error (basedpyright) | Fix the types at their source | Add `Any`, `cast()` or `# type: ignore` |
 | Unused code (vulture) | Delete it, or ask the user to whitelist it if it's used dynamically | Add a fake caller to keep it alive |
-| One-method class (R0903) | Turn it into a function | Add a second method to pass the check |
+| One-method class (SLP002) | Turn it into a function; static-method-only classes become module functions | Add a second method to pass the check |
+| Interface with one implementation (SLP001) | Use the class directly; add an ABC or Protocol when a second implementation exists | Add a fake second implementation |
+| Pass-through wrapper (SLP004) | Call the wrapped function directly and delete the wrapper | Add a trivial step to the wrapper |
+| Single-use tiny helper (SLP005) | Inline it at its one call site | Call it twice to pass the check |
+| Class budget (SLP006) | Merge classes, or use functions and dataclasses; if each class is needed, tell the user why | Turn classes into dicts of lambdas |
 | Duplicated code (R0801) | Keep one copy, next to its callers | Move it into a new `utils.py` |
 | Failing test | Fix the code, or the test if the test is wrong and the user agrees | Delete, skip or weaken the test |
 | Any rule | Change the code | Add `# noqa`, `# type: ignore`, or edit lint config |

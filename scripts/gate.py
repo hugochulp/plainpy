@@ -9,8 +9,8 @@ commits and uncommitted work that was already there are never blamed on Claude.
 
 Runs in parallel: per-file lint and complexity (unused imports included), new
 suppression comments in the diff (catching any added through the shell), types
-(basedpyright), tests (pytest), dead code (vulture), class-design rules (pylint)
-and dependency hygiene (deptry, warning only). Only findings that are new since
+(basedpyright), tests (pytest), dead code (vulture), class design (pylint),
+over-abstraction (slopcheck) and dependency hygiene (deptry, warning only). Only findings that are new since
 the base count; base results are cached per base.
 
 Loop guards: stop asking once the same problems come back unchanged, as soon as Claude
@@ -21,7 +21,6 @@ the last complete, clean run skip it too.
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import os
@@ -34,6 +33,7 @@ from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import slopcheck
 from _common import (
     PYTHON_SUFFIXES,
     SKIP_DIRS,
@@ -71,9 +71,12 @@ DOC_SUFFIXES = (".md", ".rst")
 # Any of these from a tool run means "this check could not run", never a crash of the whole hook.
 CHECK_ERRORS = (ToolError, OSError, ValueError, KeyError, TypeError)
 # Cached base results are only valid for the same checks; any edit to this file invalidates them.
-CHECKS_VERSION = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12]
+CHECKS_VERSION = hashlib.sha256(
+    b"".join(path.read_bytes() for path in sorted(Path(__file__).parent.glob("*.py")))
+).hexdigest()[:12]
 
-PYLINT_CHECKS = "too-few-public-methods,duplicate-code,too-many-ancestors,too-many-instance-attributes"
+# One-method classes are slopcheck's SLP002, which knows about base classes and runs per edit.
+PYLINT_CHECKS = "duplicate-code,too-many-ancestors,too-many-instance-attributes"
 PYLINT_OPTIONS = ("--max-parents=3", "--max-attributes=7", "--min-similarity-lines=6", "--output-format=json2")
 # Unused variables and attributes are left out: they are mostly dataclass and Pydantic fields,
 # read by name somewhere vulture can't see. Unused imports are Ruff's job.
@@ -198,21 +201,6 @@ def types_in(root: Path, files: list[str], change: Change) -> list[Finding]:
     return [finding for finding in found if finding.file in wanted]
 
 
-def plain_class(source: str, line: int) -> bool:
-    """A class with methods of its own and no base classes: the case R0903 is right about.
-    pylint can't see methods inherited from packages it can't import (Pydantic, ORMs),
-    and a class with no methods is a record, not a function in disguise."""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return False
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.lineno == line:
-            methods = [n for n in node.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)]
-            return bool(methods) and not node.bases and not node.keywords
-    return False
-
-
 def pylint_finding(root: Path, message: dict[str, Any]) -> Finding:
     rule, text = message["messageId"], message["message"]
     if rule == "R0801":
@@ -234,8 +222,7 @@ def design_in(root: Path, files: list[str], change: Change) -> list[Finding]:
     result = run_tool([*args, "--score=n", *targets], root, timeout=TOOL_TIMEOUT)
     if result.returncode & 33:  # 1 = fatal, 32 = usage error
         raise ToolError(f"pylint failed: {result.stderr.strip()[:300]}")
-    found = [pylint_finding(root, m) for m in json.loads(result.stdout)["messages"]]
-    return [f for f in found if f.rule != "R0903" or plain_class(source_of(root / f.file), f.line)]
+    return [pylint_finding(root, m) for m in json.loads(result.stdout)["messages"]]
 
 
 def dead_code_in(root: Path, files: list[str], change: Change) -> list[Finding]:
@@ -290,10 +277,14 @@ def dependencies_in(root: Path, _files: list[str], change: Change) -> list[Findi
 @dataclass(frozen=True)
 class TreeCheck:
     title: str
-    tool: str
+    tool: str | None  # None for plainpy's own checks
     run: Callable[[Path, list[str], Change], list[Finding]]
     hint: str = ""
     blocking: bool = True
+
+
+def slop_in(root: Path, files: list[str], _change: Change) -> list[Finding]:
+    return slopcheck.project_findings({name: source_of(root / name) for name in files})
 
 
 TREE_CHECKS = {
@@ -301,12 +292,14 @@ TREE_CHECKS = {
     "design": TreeCheck("Design (pylint)", "pylint", design_in),
     "dead code": TreeCheck("Dead code (vulture)", "vulture", dead_code_in, DEAD_CODE_HINT),
     "dependencies": TreeCheck("Dependencies (deptry), not blocking", "deptry", dependencies_in, blocking=False),
+    "slop": TreeCheck("Over-abstraction (slopcheck)", None, slop_in),
 }
 
 
 def base_cache_key(name: str, change: Change) -> str:
     """Base results stay valid while the base, the tool and its environment, and these checks are the same."""
-    command = tool_command(TREE_CHECKS[name].tool, change.project)
+    tool = TREE_CHECKS[name].tool
+    command = tool_command(tool, change.project) if tool else ["plainpy"]
     local = Path(command[0])
     installed = local.stat().st_mtime_ns if local.is_absolute() and local.exists() else ""
     venv = (change.project / ".venv" / "bin" / "python").exists()
@@ -421,8 +414,14 @@ def tree_sections(change: Change, workdir: Path) -> list[Section]:
             sections.append(failed(check.title, f"not compared: the base could not be checked ({previous})"))
             continue
         new = new_findings(found, [replace(f, file=moved.get(f.file, f.file)) for f in previous])
+        if name == "slop":
+            new = slopcheck.class_budget(new, change.settings)
         notes = [NO_VENV_NOTE] if name == "types" and no_venv and new else []
-        sections.append(Section(check.title, new, check.hint, check.blocking, notes))
+        blocking = [f for f in new if f.rule not in slopcheck.WARN_RULES]
+        warnings = [f for f in new if f.rule in slopcheck.WARN_RULES]
+        sections.append(Section(check.title, blocking, check.hint, check.blocking, notes))
+        if warnings:
+            sections.append(Section(f"{check.title}, warnings", warnings, blocking=False))
     return sections
 
 
@@ -437,7 +436,7 @@ def run_checks(change: Change) -> list[Section]:
     pytest = change.project / ".venv" / "bin" / "pytest"
     with tempfile.TemporaryDirectory() as tmp, ThreadPoolExecutor() as pool:
         tree = pool.submit(tree_sections, change, Path(tmp))
-        lint = pool.submit(guarded, "Lint and complexity", lambda: lint_and_complexity(change))
+        lint = pool.submit(guarded, "Lint, complexity and slopcheck", lambda: lint_and_complexity(change))
         tests = pool.submit(guarded, "Tests (pytest)", lambda: failing_tests(change, pytest), TESTS_HINT)
         try:
             bad, reasoned = suppressions(change)

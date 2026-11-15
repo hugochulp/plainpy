@@ -25,14 +25,15 @@ from pathlib import Path
 from typing import Any
 
 from _common import CONFIG_FILES, PYTHON_SUFFIXES, pre_tool_decision, read_hook_input
+from slopcheck import ALLOW_CODES
 
 FILE_WIDE = re.compile(
     r"#\s*(ruff:\s*noqa|flake8:\s*noqa|mypy:\s*ignore-errors|pylint:\s*skip-file|pyright:\s*basic)", re.IGNORECASE
 )
 LINE_LEVEL = re.compile(
     r"#\s*(?P<kind>noqa|type:\s*ignore|pyright:\s*ignore|pyrefly:\s*ignore|ty:\s*ignore"
-    r"|pylint:\s*disable|pragma:\s*no\s*cover)"
-    r"(?P<codes>:\s*[\w-]+(?:\s*,\s*[\w-]+)*|\[[^\]]+\]|=[\w,-]+)?",
+    r"|pylint:\s*disable|pragma:\s*no\s*cover|slopcheck:\s*allow)"
+    rf"(?P<codes>:\s*[\w-]+(?:\s*,\s*[\w-]+)*|\[[^\]]+\]|=[\w,-]+|\s+{ALLOW_CODES})?",
     re.IGNORECASE,
 )
 REASON = re.compile(r"\s--\s+\S+(?:\s+\S+){2,}")

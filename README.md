@@ -3,9 +3,9 @@
 A Claude Code plugin that keeps the Python Claude writes small and flat.
 It does this with deterministic checks run as hooks, not with longer instructions.
 
-**Status: v0.3.** Per-edit lint and complexity checks, guards against silencing them, and a
-full check of the whole change when Claude finishes. Custom anti-abstraction rules come in
-a later milestone.
+**Status: v0.4.0.** Per-edit lint, complexity and anti-abstraction checks, guards against
+silencing them, and a full check of the whole change when Claude finishes. More slopcheck
+rules (SLP007–SLP011) come in v0.4.1.
 
 ## What it does
 
@@ -18,7 +18,8 @@ a later milestone.
     and gives a reason: `# noqa: C901 -- parser mirrors the spec grammar`. File-wide
     suppressions (`# ruff: noqa`, `# mypy: ignore-errors`, `# pylint: skip-file`, ...) are
     always refused. Covers `noqa` (including complexipy's), `type: ignore`, `pyright: ignore`,
-    `pyrefly: ignore`, `ty: ignore`, `pylint: disable` and `pragma: no cover`;
+    `pyrefly: ignore`, `ty: ignore`, `pylint: disable`, `pragma: no cover` and
+    `slopcheck: allow`;
   - a change to lint or type-checker config (`[tool.ruff]` and similar sections of
     `pyproject.toml`, `ruff.toml`, `.plainpy.toml`, `pyrightconfig.json`, ...) or a new
     runtime dependency (`[project.dependencies]`, `requirements*.txt`) **asks you** first.
@@ -27,7 +28,8 @@ a later milestone.
   first. Dev-only installs (`--dev`, `--group`) and `pip install -r` / `-e .` pass.
 - **After every Write/Edit of a `.py` file:**
   1. applies safe Ruff fixes and formats the file;
-  2. lints it with a broad Ruff rule set and checks cognitive complexity with complexipy;
+  2. lints it with a broad Ruff rule set, checks cognitive complexity with complexipy, and
+     runs slopcheck's single-file rules (see below);
   3. compares the findings with the same file when the session started. Only **new** problems,
      or size and complexity numbers that went **up**, are reported;
   4. reports them to Claude, which fixes them before moving on (`standard` and `strict`).
@@ -38,11 +40,13 @@ a later milestone.
 
   | Check | Tool | Blocks? |
   |---|---|---|
-  | Lint and complexity on every changed file, unused imports included | Ruff, complexipy | yes |
+  | Lint, complexity and single-file slopcheck rules on every changed file, unused imports included | Ruff, complexipy, slopcheck | yes |
   | New suppression comments anywhere in the diff, including any added through the shell | plainpy | yes |
   | Tests (runs only when `.venv/bin/pytest` exists) | pytest | yes |
   | Types (errors only; `strict` adds warnings) | basedpyright | yes |
-  | One-method classes (with no base class), duplicated code, deep inheritance, too many attributes | Pylint | yes |
+  | Interfaces with one implementation, the class budget | slopcheck | yes |
+  | Tiny private helpers used once | slopcheck | no, reported |
+  | Duplicated code, deep inheritance, too many attributes | Pylint | yes |
   | Unused functions, classes, methods and unreachable code | vulture | yes |
   | Unused, missing and transitive dependencies | deptry | no, reported |
   | Suppressions added with a reason | plainpy | no, listed for your review |
@@ -54,6 +58,24 @@ a later milestone.
   turn. Nothing is re-run when files haven't changed since the last complete check, or when
   only Markdown or reStructuredText files changed. If a tool fails to run, you get a note
   and the check runs again next time.
+
+### slopcheck
+
+plainpy's own rules for over-abstraction (`scripts/slopcheck.py`, stdlib `ast` only). Test
+files and `.pyi` stubs are never judged, and only definitions that are new or changed in the session count.
+
+| Rule | Flags | Runs | Default |
+|---|---|---|---|
+| SLP001 | An ABC with at most one implementation (subclasses at any depth count), or a Protocol that exactly one class in the project implements. Test fakes don't count | finish | error |
+| SLP002 | A class with one public method (or `__call__`), or only static methods, and no base class: it should be a function | every edit | error |
+| SLP004 | A function, or a method of a class without bases, that only passes its arguments, unchanged, to another call | every edit | error |
+| SLP005 | A private helper under 3 statements that's used once | finish | warning |
+| SLP006 | More new classes in the session than the budget (lenient 6, standard 3, strict 2; `class_budget`). Exceptions don't count; a class moved to another file counts as new | finish | error |
+
+To keep one definition, put a reason on its `def` or `class` header (any line of it, so it
+survives the formatter wrapping a long header):
+`# slopcheck: allow SLP004 -- old name kept for existing callers`. The reason follows the
+same rules as any other suppression.
 
 Only what changed during the session is judged: problems already in the code, in earlier
 commits on your branch, or in uncommitted work from before the session are never reported,
@@ -105,6 +127,7 @@ profile = "standard"   # lenient | standard | strict
 cognitive_max = 12
 mccabe_max = 9
 max_gate_blocks = 3    # finish-check attempts per turn before plainpy stops asking
+class_budget = 4       # new classes per session before SLP006 blocks
 ```
 
 | Setting | lenient | standard | strict |
@@ -112,6 +135,7 @@ max_gate_blocks = 3    # finish-check attempts per turn before plainpy stops ask
 | Findings block Claude | no (warn) | yes | yes |
 | Cognitive complexity max (complexipy) | 25 | 15 | 10 |
 | Cyclomatic complexity max (Ruff C901) | 15 | 10 | 8 |
+| New classes per session (SLP006) | 6 | 3 | 2 |
 | Type warnings block (not just errors) | no | no | yes |
 
 Ruff also enforces at most 5 arguments, 10 branches, 6 returns and 40 statements per

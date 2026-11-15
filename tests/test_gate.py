@@ -121,7 +121,7 @@ def test_new_problems_block_with_one_section_each(repo: Path, shared_venv: Path)
     for expected in (
         "tests/test_calc.py::test_add failed",
         "reportArgumentType",
-        "R0903 Too few public methods",
+        "SLP002 `Doubler` has one public method",
         "unused-function",
         "'broken'",
         "`# noqa` needs a rule code and a reason",
@@ -232,7 +232,7 @@ def test_a_class_that_grows_is_reported(repo: Path) -> None:
     (repo / "src" / "demo" / "big.py").write_text(grown)
     reason = stop()["reason"]
     assert "R0902 Too many instance attributes (9/7)" in reason
-    assert "R0903" not in reason  # unchanged since the base
+    assert "SLP002" not in reason  # unchanged since the base
 
 
 def test_known_failing_tests_are_not_blamed(repo: Path, shared_venv: Path) -> None:
@@ -282,7 +282,7 @@ def test_gives_up_at_once_when_nothing_changed_after_a_block(repo: Path) -> None
     outcome = stop(again=True)
     assert "decision" not in outcome
     assert "changed nothing since it asked" in outcome["systemMessage"]
-    assert "R0903" in outcome["systemMessage"]
+    assert "SLP002" in outcome["systemMessage"]
     assert stop() == {}  # the user has seen it; the next turn doesn't re-run the same check
 
 
@@ -386,3 +386,27 @@ def test_a_base_that_cannot_be_checked_never_blocks(monkeypatch: pytest.MonkeyPa
     assert not section.blocking
     assert section.incomplete
     assert "vulture timed out" in section.notes[0]
+
+
+def test_slopcheck_runs_at_finish(repo: Path) -> None:
+    start(repo)
+    (repo / "src" / "demo" / "store.py").write_text(
+        "from abc import ABC, abstractmethod\n\n\nclass Store(ABC):\n    @abstractmethod\n"
+        "    def save(self, item: str) -> None: ...\n\n\nclass FileStore(Store):\n"
+        "    def save(self, item: str) -> None:\n        print(_label(item))\n\n\n"
+        "def _label(item: str) -> str:\n    return f'[{item}]'\n"
+    )
+    reason = stop()["reason"]
+    assert "SLP001 `Store` has one implementation, `FileStore`" in reason
+    assert "Over-abstraction (slopcheck), warnings:" in reason
+    assert "SLP005 `_label` is used once" in reason
+
+
+def test_class_budget_at_finish(repo: Path) -> None:
+    (repo / ".plainpy.toml").write_text("[overrides]\nclass_budget = 1\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "tight budget")
+    start(repo)
+    records = "".join(f"class Record{n}:\n    size = {n}\n\n\n" for n in range(2))
+    (repo / "src" / "demo" / "records.py").write_text(records)
+    assert "SLP006 2 new classes, budget 1: Record0 (src/demo/records.py)" in stop()["reason"]
