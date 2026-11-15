@@ -33,7 +33,6 @@ from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-import slopcheck
 from _common import (
     PYTHON_SUFFIXES,
     SKIP_DIRS,
@@ -61,6 +60,7 @@ from _common import (
 from _findings import Finding, ToolError, finding_lines, hint_lines, is_test_file, located, new_findings, run_tool
 from check_file import Run, base_source, findings_since_base
 from guard_edit import FILE_WIDE, SUPPRESSION_HELP, added_suppressions, suppression_problem
+from slopcheck import finish_rules
 
 TOOL_TIMEOUT = 150
 MAX_LINES_PER_SECTION = 15
@@ -70,9 +70,9 @@ WHITELIST = "vulture_whitelist.py"
 DOC_SUFFIXES = (".md", ".rst")
 # Any of these from a tool run means "this check could not run", never a crash of the whole hook.
 CHECK_ERRORS = (ToolError, OSError, ValueError, KeyError, TypeError)
-# Cached base results are only valid for the same checks; any edit to this file invalidates them.
+# Cached base results are only valid for the same checks; any edit to these scripts invalidates them.
 CHECKS_VERSION = hashlib.sha256(
-    b"".join(path.read_bytes() for path in sorted(Path(__file__).parent.glob("*.py")))
+    b"".join(path.read_bytes() for path in sorted(Path(__file__).parent.rglob("*.py")))
 ).hexdigest()[:12]
 
 # One-method classes are slopcheck's SLP002, which knows about base classes and runs per edit.
@@ -92,6 +92,9 @@ FAILED_TEST = re.compile(r"^(?:FAILED|ERROR) (?P<test>.+?)(?: - .*)?$", re.MULTI
 # Without the project's .venv, basedpyright can't see installed packages, so these say more
 # about the environment than about the code. deptry still checks imports against declared deps.
 ENVIRONMENT_RULES = {"reportMissingImports", "reportMissingModuleSource"}
+# Checks basedpyright's types prove unnecessary: slopcheck's SLP009, a warning outside strict.
+NO_RANGE = {"start": {"line": -1}}  # e.g. an import cycle: a whole-file finding, line 0
+DEFENSIVE_RULES = {"reportUnnecessaryIsInstance", "reportUnnecessaryComparison", "reportUnnecessaryContains"}
 NO_VENV_NOTE = "no .venv found, so unresolved imports were not checked"
 NO_PYTEST_NOTE = "tests not run: no .venv with pytest installed"
 TYPES_HINT = "fix the types. Do not add `Any`, `cast()` or `# type: ignore` to silence them."
@@ -181,10 +184,17 @@ def finding_at(root: Path, file: str, line: int, rule: str, message: str) -> Fin
 # --- checks on a whole tree (run on the working tree and on the base tree) --------------
 
 
+def type_rule(diagnostic: dict[str, Any], *, warnings: bool) -> str | None:
+    """The rule a basedpyright diagnostic is reported under, or None to drop it: errors, its checks
+    that prove an isinstance or None check unnecessary (as SLP009), and other warnings in strict."""
+    rule, severity = diagnostic.get("rule") or "type-error", diagnostic["severity"]
+    if rule in DEFENSIVE_RULES and severity in {"error", "warning"}:  # plainpy's profile decides if it blocks
+        return "SLP009"
+    return rule if severity == "error" or (severity == "warning" and warnings) else None
+
+
 def types_in(root: Path, files: list[str], change: Change) -> list[Finding]:
     args = [*tool_command("basedpyright", change.project), "--outputjson"]
-    if not change.settings.type_warnings:
-        args += ["--level", "error"]
     python = change.project / ".venv" / "bin" / "python"
     if python.exists():
         args += ["--pythonpath", str(python)]
@@ -194,9 +204,9 @@ def types_in(root: Path, files: list[str], change: Change) -> list[Finding]:
         raise ToolError(f"basedpyright failed: {(result.stderr or result.stdout).strip()[:300]}")
     wanted = set(files)
     found = [
-        finding_at(root, d["file"], d["range"]["start"]["line"] + 1, d.get("rule") or "type-error", d["message"])
+        finding_at(root, d["file"], d.get("range", NO_RANGE)["start"]["line"] + 1, rule, d["message"])
         for d in json.loads(result.stdout)["generalDiagnostics"]
-        if d["severity"] in {"error", "warning"} and d.get("rule") not in ignored
+        if d.get("rule") not in ignored and (rule := type_rule(d, warnings=change.settings.type_warnings))
     ]
     return [finding for finding in found if finding.file in wanted]
 
@@ -284,7 +294,7 @@ class TreeCheck:
 
 
 def slop_in(root: Path, files: list[str], _change: Change) -> list[Finding]:
-    return slopcheck.project_findings({name: source_of(root / name) for name in files})
+    return finish_rules.project_findings({name: source_of(root / name) for name in files})
 
 
 TREE_CHECKS = {
@@ -402,6 +412,7 @@ def tree_sections(change: Change, workdir: Path) -> list[Section]:
         current = {name: pool.submit(check.run, change.project, files, change) for name, check in TREE_CHECKS.items()}
         base = base_findings(change, workdir)
     no_venv, moved = not (change.project / ".venv").exists(), change.moved
+    warn_rules = finish_rules.WARN_RULES | (set() if change.settings.type_warnings else {"SLP009"})
     sections = []
     for name, future in current.items():
         check, previous = TREE_CHECKS[name], base[name]
@@ -415,10 +426,10 @@ def tree_sections(change: Change, workdir: Path) -> list[Section]:
             continue
         new = new_findings(found, [replace(f, file=moved.get(f.file, f.file)) for f in previous])
         if name == "slop":
-            new = slopcheck.class_budget(new, change.settings)
+            new = finish_rules.class_budget(new, change.settings)
         notes = [NO_VENV_NOTE] if name == "types" and no_venv and new else []
-        blocking = [f for f in new if f.rule not in slopcheck.WARN_RULES]
-        warnings = [f for f in new if f.rule in slopcheck.WARN_RULES]
+        blocking = [f for f in new if f.rule not in warn_rules]
+        warnings = [f for f in new if f.rule in warn_rules]
         sections.append(Section(check.title, blocking, check.hint, check.blocking, notes))
         if warnings:
             sections.append(Section(f"{check.title}, warnings", warnings, blocking=False))

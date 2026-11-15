@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 from _common import Settings
-from _findings import new_findings
-from slopcheck import class_budget, file_findings, project_findings
+from _findings import finding_lines, new_findings
+from slopcheck.edit_rules import file_findings
+from slopcheck.finish_rules import class_budget, project_findings
 
 FIXTURES = Path(__file__).resolve().parent / "slopcheck"
 SETTINGS = Settings(profile="standard", blocking=True, cognitive_max=15, mccabe_max=10)
@@ -67,7 +68,7 @@ def test_class_budget_skips_exceptions_and_allowed_classes() -> None:
         + "class Stop(KeyboardInterrupt):\n    pass\n\n\n"
         + "class Kept:  # slopcheck: allow SLP006 -- mirrors the wire format\n    x = 1\n"
     )
-    assert class_budget(project_findings({"m.py": source}), SETTINGS) == []
+    assert [f for f in class_budget(project_findings({"m.py": source}), SETTINGS) if f.rule == "SLP006"] == []
 
 
 @pytest.mark.parametrize("middle", ["Polygon(Shape)", "Polygon(Shape, ABC)"])
@@ -234,3 +235,93 @@ def test_protocols_do_not_require_what_object_provides() -> None:
 
 def test_a_long_dotted_base_does_not_crash() -> None:
     assert flagged("SLP001", f"class X({'.'.join(f'a{n}' for n in range(400))}):\n    pass\n") == []
+
+
+def test_exception_budget_counts_only_new_exception_classes() -> None:
+    errors = "".join(f"class E{n}(ValueError):\n    pass\n\n\n" for n in range(4))
+    base = project_findings({"m.py": "class E0(ValueError):\n    pass\n"})
+    within = project_findings({"m.py": errors.rsplit("class E3", 1)[0]})
+    over = project_findings({"m.py": errors})
+    assert [f for f in class_budget(new_findings(within, base), SETTINGS) if f.rule == "SLP011"] == []
+    [budget] = [f for f in class_budget(new_findings(over, base), SETTINGS) if f.rule == "SLP011"]
+    assert budget.message == "3 new exception classes, budget 2: E1 (m.py), E2 (m.py), E3 (m.py)"
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"), [("pkg/utils.py", 1), ("pkg/helpers.py", 1), ("pkg/util.py", 0), ("tests/utils.py", 0)]
+)
+def test_grab_bag_module_names(path: str, expected: int) -> None:
+    assert len([f for f in project_findings({path: "X = 1\n"}) if f.rule == "SLP010"]) == expected
+
+
+def test_a_wide_module_warns_again_only_when_it_grows() -> None:
+    def module(count: int) -> dict[str, str]:
+        return {"m.py": "".join(f"def f{n}() -> int:\n    return {n}\n\n\n" for n in range(count))}
+
+    base = project_findings(module(16))
+    assert [f.rule for f in new_findings(project_findings(module(16)), base) if f.rule == "SLP010"] == []
+    assert [f.rule for f in new_findings(project_findings(module(17)), base) if f.rule == "SLP010"] == ["SLP010"]
+    assert [f for f in project_findings({"pkg/__init__.py": module(16)["m.py"]}) if f.rule == "SLP010"] == []
+
+
+MODEL = "from pydantic import BaseModel\n\n\nclass User(BaseModel):{allow}\n    name: str\n"
+
+
+def test_a_model_validated_only_in_tests_is_away_from_io() -> None:
+    test = "from app import User\n\n\ndef test_user() -> None:\n    assert User.model_validate({'name': 'a'})\n"
+    sources = {"app.py": MODEL.format(allow=""), "tests/test_app.py": test}
+    assert [f.scope for f in project_findings(sources) if f.rule == "SLP003"] == ["User"]
+
+
+def test_a_model_can_be_allowed() -> None:
+    source = MODEL.format(allow="  # slopcheck: allow SLP003 -- shared with the web client")
+    assert flagged("SLP003", source) == []
+
+
+def test_calls_in_tests_count_as_passing_an_option() -> None:
+    module = "def fetch(url: str, timeout: float = 30) -> str:\n    return f'{url} {timeout}'\n"
+    test = "from app import fetch\n\n\ndef test_fetch() -> None:\n    assert fetch('a', timeout=1)\n"
+    assert [f for f in project_findings({"app.py": module, "tests/test_app.py": test}) if f.rule == "SLP007"] == []
+
+
+def test_overloads_count_once_towards_a_wide_module() -> None:
+    overloads = (
+        "@overload\ndef f(x: int) -> int: ...\n@overload\ndef f(x: str) -> str: ...\ndef f(x):\n    return x\n\n\n"
+    )
+    source = overloads + "".join(f"def g{n}() -> int:\n    return {n}\n\n\n" for n in range(14))
+    assert flagged("SLP010", source) == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from pydantic import BaseModel\nfrom pydantic_settings import BaseSettings\n\n\nclass Db(BaseModel):\n    url: str\n\n\n"
+        "class Settings(BaseSettings):\n    db: Db\n",
+        "from pydantic import BaseModel\nfrom sqlmodel import SQLModel\n\n\nclass Meta(BaseModel):\n    tags: list[str]\n\n\n"
+        "class Hero(SQLModel, table=True):\n    meta: Meta\n",
+        "from pydantic import BaseModel\n\n\nclass Item(BaseModel):\n    sku: str\n\n\nclass Order(BaseModel):\n"
+        "    items: list['Item']\n\n\ndef load(d: dict) -> Order:\n    return Order.model_validate(d)\n",
+        "from pydantic import BaseModel\n\n\nclass User(BaseModel):\n    name: str\n\n\n@app.post('/')\n"
+        "def create(user: 'User') -> str:\n    return user.name\n",
+        "from pydantic import BaseModel\n\n\nclass User(BaseModel):\n    name: str\n\n"
+        "    def save(self, f) -> None:\n        f.write(self.model_dump_json())\n",
+    ],
+    ids=["settings field", "table field", "quoted field", "quoted handler type", "dumps itself"],
+)
+def test_models_that_reach_io_another_way(source: str) -> None:
+    assert flagged("SLP003", source) == []
+
+
+def test_a_no_op_implementing_a_project_protocol_is_not_a_placeholder() -> None:
+    source = (
+        "from typing import Protocol\n\n\nclass Sink(Protocol):\n    def write(self, s: str) -> None: ...\n\n\n"
+        "class NullSink:\n    def write(self, s: str) -> None:\n        pass\n\n\nclass Real:\n    def write(self, s: str) -> None:\n"
+        "        print(s)\n"
+    )
+    assert flagged("SLP008", source) == []
+
+
+def test_grouped_model_findings_name_every_model() -> None:
+    source = "from pydantic import BaseModel\n\n\nclass Tag(BaseModel):\n    name: str\n\n\nclass Note(BaseModel):\n    tags: list[Tag]\n"
+    found = [f for f in project_findings({"m.py": source}) if f.rule == "SLP003"]
+    assert finding_lines(found) == ["m.py SLP003 x2 at lines 4, 8: `Tag` never reaches I/O, `Note` never reaches I/O"]

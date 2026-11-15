@@ -3,9 +3,8 @@
 A Claude Code plugin that keeps the Python Claude writes small and flat.
 It does this with deterministic checks run as hooks, not with longer instructions.
 
-**Status: v0.4.0.** Per-edit lint, complexity and anti-abstraction checks, guards against
-silencing them, and a full check of the whole change when Claude finishes. More slopcheck
-rules (SLP007–SLP011) come in v0.4.1.
+**Status: v0.4.1.** Per-edit lint, complexity and anti-abstraction checks, guards against
+silencing them, and a full check of the whole change when Claude finishes.
 
 ## What it does
 
@@ -44,8 +43,9 @@ rules (SLP007–SLP011) come in v0.4.1.
   | New suppression comments anywhere in the diff, including any added through the shell | plainpy | yes |
   | Tests (runs only when `.venv/bin/pytest` exists) | pytest | yes |
   | Types (errors only; `strict` adds warnings) | basedpyright | yes |
-  | Interfaces with one implementation, the class budget | slopcheck | yes |
-  | Tiny private helpers used once | slopcheck | no, reported |
+  | `isinstance` and `None` checks the types already prove (SLP009) | basedpyright | in `strict`; otherwise reported |
+  | Interfaces with one implementation, placeholder code, the class budget | slopcheck | yes |
+  | Pydantic models away from I/O, unused options, tiny helpers used once, wide modules, too many exception classes | slopcheck | no, reported |
   | Duplicated code, deep inheritance, too many attributes | Pylint | yes |
   | Unused functions, classes, methods and unreachable code | vulture | yes |
   | Unused, missing and transitive dependencies | deptry | no, reported |
@@ -61,8 +61,9 @@ rules (SLP007–SLP011) come in v0.4.1.
 
 ### slopcheck
 
-plainpy's own rules for over-abstraction (`scripts/slopcheck.py`, stdlib `ast` only). Test
-files and `.pyi` stubs are never judged, and only definitions that are new or changed in the session count.
+plainpy's own rules for over-abstraction (`scripts/slopcheck/`, stdlib `ast` only):
+`edit_rules.py` runs after every edit, `finish_rules.py` when Claude finishes. Test files
+and `.pyi` stubs are never judged, and only definitions that are new or changed in the session count.
 
 | Rule | Flags | Runs | Default |
 |---|---|---|---|
@@ -70,7 +71,13 @@ files and `.pyi` stubs are never judged, and only definitions that are new or ch
 | SLP002 | A class with one public method (or `__call__`), or only static methods, and no base class: it should be a function | every edit | error |
 | SLP004 | A function, or a method of a class without bases, that only passes its arguments, unchanged, to another call | every edit | error |
 | SLP005 | A private helper under 3 statements that's used once | finish | warning |
+| SLP003 | A Pydantic model that never reaches I/O: nothing validates it, builds it from a dict, dumps it, asks for its JSON schema or passes the class to a call (as LLM SDKs take `response_format=Model`), and no decorated handler takes it. Fields, bases and subclasses of a model that does count. `BaseSettings` and `SQLModel` are exempt; uses in tests don't count | finish | warning |
 | SLP006 | More new classes in the session than the budget (lenient 6, standard 3, strict 2; `class_budget`). Exceptions don't count; a class moved to another file counts as new | finish | error |
+| SLP007 | A parameter with a default that no call in the project passes, by name or position (calls in tests count). Skips private, decorated and special methods, methods a base class or subclass shares, and functions that are never called, passed around as values, or called with `*`/`**` | finish | warning |
+| SLP008 | A new function whose body is only `pass`, `...`, a docstring or `raise NotImplementedError`, or that returns a constant while ignoring all its parameters. Skips decorated functions (`@abstractmethod`, `@overload`), special methods, and methods a base class or subclass shares | finish | error |
+| SLP009 | basedpyright's `reportUnnecessaryIsInstance`, `reportUnnecessaryComparison` and `reportUnnecessaryContains`. Only reported when your basedpyright mode turns them on (its default and `strict` do; `standard` and `basic` don't). Being basedpyright's, it can't take a slopcheck allow comment | finish | warning (error in strict) |
+| SLP010 | A module with more than 15 public functions and classes (reported again only when the count goes up; `__init__.py` is exempt), or a file named `utils.py`, `helpers.py` or `common.py` | finish | warning |
+| SLP011 | More than 2 new exception classes in the session | finish | warning |
 
 To keep one definition, put a reason on its `def` or `class` header (any line of it, so it
 survives the formatter wrapping a long header):
