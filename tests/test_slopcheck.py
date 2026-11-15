@@ -120,3 +120,117 @@ def test_inherited_methods_satisfy_a_protocol() -> None:
         "class A:\n    def ping(self) -> None:\n        print(1)\n\n\nclass B(A):\n    pass\n"
     )
     assert flagged("SLP001", source) == []
+
+
+def test_an_upper_case_allow_counts() -> None:
+    source = "def legacy(a):  # SLOPCHECK: allow SLP004 -- old name kept for callers\n    return area(a)\n"
+    assert flagged("SLP004", source) == []
+
+
+def test_protocol_special_methods_must_be_implemented() -> None:
+    source = (
+        "from typing import Protocol\n\n\nclass Source(Protocol):\n    def read(self) -> str: ...\n"
+        "    def __enter__(self) -> 'Source': ...\n\n\nclass Plain:\n    def read(self) -> str:\n        return ''\n"
+    )
+    assert flagged("SLP001", source) == []
+
+
+def test_nested_classes_keep_their_full_names() -> None:
+    method = "        def run(self, x):\n            return go(x)\n"
+    source = f"class A:\n    class Inner:\n{method}\n\nclass B:\n    class Inner:\n{method}"
+    assert flagged("SLP004", source) == ["A.Inner.run", "B.Inner.run"]
+
+
+STORE = "from abc import ABC\n\n\nclass Store(ABC):\n    pass\n\n\nclass Impl(Store):\n    pass\n"
+
+
+@pytest.mark.parametrize(
+    ("path", "second", "expected"),
+    [
+        ("pkg/c.py", "from pkg.a import Store as BaseStore\n\n\nclass Other(BaseStore):\n    pass\n", []),
+        ("pkg/c.py", "from pkg.b import Store as BaseStore\n\n\nclass Other(BaseStore):\n    pass\n", ["Store"]),
+        ("pkg/c.py", "import pkg.a as a\n\n\nclass Other(a.Store):\n    pass\n", []),
+        ("pkg/c.py", "from . import b\n\n\nclass Other(b.Store):\n    pass\n", ["Store"]),
+        ("pkg/sub/c.py", "from ..a import Store\n\n\nclass Other(Store):\n    pass\n", []),
+        ("pkg/c.py", "from pkg import Store\n\n\nclass Other(Store):\n    pass\n", []),  # re-exported by pkg
+        ("pkg/c.py", "from pkg.b import *\n\n\nclass Other(Store):\n    pass\n", []),  # unresolved: by short name
+    ],
+)
+def test_bases_are_found_through_imports(path: str, second: str, expected: list[str]) -> None:
+    sources = {
+        "src/pkg/__init__.py": "from .a import Store\n",
+        "src/pkg/a.py": STORE,
+        "src/pkg/b.py": "class Store:\n    pass\n",
+        f"src/{path}": second,
+    }
+    assert [f.scope for f in project_findings(sources) if f.rule == "SLP001"] == expected
+
+
+def test_classes_that_share_a_short_name_stay_apart() -> None:
+    other = "class Store:\n    pass\n\n\nclass Impl(ValueError):\n    pass\n\n\nclass Other(Store):\n    pass\n"
+    found = project_findings({"pkg/a.py": STORE, "pkg/b.py": other})
+    assert [(f.file, f.scope) for f in found if f.rule == "SLP001"] == [("pkg/a.py", "Store")]
+    assert ("pkg/a.py", "Impl") in [(f.file, f.scope) for f in found if f.rule == "SLP006"]
+
+
+def test_a_name_re_exported_as_its_own_module_does_not_loop() -> None:
+    sources = {
+        "pkg/__init__.py": "from .main import main\n",  # like unittest: `pkg.main` is a module and a function
+        "pkg/main.py": STORE,
+        "pkg/c.py": "import pkg.main\n\n\nclass Other(pkg.main.Missing):\n    pass\n",
+    }
+    assert [f.scope for f in project_findings(sources) if f.rule == "SLP001"] == ["Store"]
+
+
+BASE = "from abc import ABC\n\n\nclass Base(ABC):\n    pass\n\n\nclass One(Base):\n    pass\n"
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        {"pkg/c.py": "from pkg.a import Base\n\n\nclass Base(Base):\n    pass\n"},  # named like its base
+        {
+            "pkg/c.py": "from pkg.a import Base\n\n\nclass Two(Base):\n    pass\n\n\ndef f():\n    from pkg.b import Base\n"
+        },
+        {
+            "pkg/c.py": "try:\n    from pkg.a import Base\nexcept ImportError:\n    from pkg.b import Base\n\n\nclass Two(Base):\n    pass\n"
+        },
+        {
+            "pkg/a.py": BASE
+            + "\n\nclass A:\n    class Base:\n        pass\n\n    class C:\n        class Two(Base):\n            pass\n"
+        },
+        {
+            "pkg/a.py": BASE
+            + "\n\nclass A:\n    class Base:\n        pass\n\n    def make(self):\n        class Two(Base):\n            pass\n"
+        },
+        {
+            "config.py": BASE,
+            "scripts/config.py": BASE,
+            "scripts/c.py": "from config import Base\n\n\nclass Two(Base):\n    pass\n",
+        },
+    ],
+)
+def test_a_base_is_never_resolved_to_the_wrong_class(second: dict[str, str]) -> None:
+    sources = {"pkg/a.py": BASE, "pkg/b.py": "class Base:\n    pass\n"} | second
+    assert [(f.file, f.scope) for f in project_findings(sources) if f.rule == "SLP001"] == []
+
+
+def test_a_subclass_named_like_its_exception_base_is_an_exception() -> None:
+    sources = {
+        "errors.py": "class Problem(Exception):\n    pass\n",
+        "x.py": "from errors import Problem\n\n\nclass Problem(Problem):\n    pass\n",
+    }
+    assert [f.scope for f in project_findings(sources) if f.rule == "SLP006"] == []
+
+
+def test_protocols_do_not_require_what_object_provides() -> None:
+    source = (
+        "from typing import Protocol\n\n\nclass Key(Protocol):\n    def name(self) -> str: ...\n    def __hash__(self) -> int: ...\n\n\n"
+        "class A:\n    def name(self) -> str:\n        return 'a'\n\n    def __hash__(self) -> int:\n        return 1\n\n\n"
+        "class B:\n    def name(self) -> str:\n        return 'b'\n"
+    )
+    assert flagged("SLP001", source) == []
+
+
+def test_a_long_dotted_base_does_not_crash() -> None:
+    assert flagged("SLP001", f"class X({'.'.join(f'a{n}' for n in range(400))}):\n    pass\n") == []

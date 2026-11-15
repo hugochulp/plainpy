@@ -77,6 +77,12 @@ survives the formatter wrapping a long header):
 `# slopcheck: allow SLP004 -- old name kept for existing callers`. The reason follows the
 same rules as any other suppression.
 
+Classes are told apart by their full name, module and nesting included (`pkg.a.Outer.Inner`),
+so two classes that share a short name are never mixed up. A base class is followed through
+imports: aliases, relative imports, and re-exports from a package's `__init__.py`. A base
+that can't be followed, such as one from a star import, is matched by its short name, so a
+rule can miss a finding there but never reports a wrong one.
+
 Only what changed during the session is judged: problems already in the code, in earlier
 commits on your branch, or in uncommitted work from before the session are never reported,
 so the plugin is safe to use on existing repos. Gitignored files are never checked, renamed

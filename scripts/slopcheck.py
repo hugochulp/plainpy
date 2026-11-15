@@ -5,6 +5,7 @@ run in the finish check (via gate), over every Python file in the project. Test 
 stubs are never judged. A rule can be allowed on one definition with a comment on its
 `def` or `class` header (any line of it, since the formatter may wrap a long header):
 `# slopcheck: allow SLP004 -- reason of three or more words`.
+Classes are known by their full name (see `_classes`).
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 
+from _classes import Function, class_defs, hierarchy, name_of, qualnames
 from _common import Settings
 from _findings import Finding, is_test_file
 
@@ -31,8 +33,6 @@ MAX_HELPER_STATEMENTS = 3
 BUILTIN_EXCEPTIONS = frozenset(
     name for name, value in vars(builtins).items() if isinstance(value, type) and issubclass(value, BaseException)
 )
-
-Function = ast.FunctionDef | ast.AsyncFunctionDef
 
 
 def parse(source: str) -> ast.Module | None:
@@ -59,7 +59,7 @@ def placed(path: str, source: str, definitions: list[ast.ClassDef | Function], f
     if not found:
         return []
     body_starts = {node.lineno: node.body[0].lineno for node in definitions}
-    comments = comments_by_line(source) if "slopcheck" in source else {}
+    comments = comments_by_line(source) if "slopcheck" in source.lower() else {}
     kept = []
     for finding in found:
         header = range(finding.line, max(finding.line, body_starts[finding.line] - 1) + 1)
@@ -72,15 +72,6 @@ def placed(path: str, source: str, definitions: list[ast.ClassDef | Function], f
         if finding.rule not in allowed:
             kept.append(replace(finding, file=path))
     return kept
-
-
-def name_of(node: ast.expr) -> str:
-    """`Protocol` for `Protocol`, `typing.Protocol` and `Protocol[T]`."""
-    if isinstance(node, ast.Subscript):
-        node = node.value
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return node.id if isinstance(node, ast.Name) else ""
 
 
 def base_names(cls: ast.ClassDef) -> set[str]:
@@ -110,14 +101,10 @@ def methods(cls: ast.ClassDef) -> list[Function]:
     return [node for node in cls.body if isinstance(node, Function)]
 
 
-def class_defs(tree: ast.Module) -> list[ast.ClassDef]:
-    return [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
-
-
-def functions(tree: ast.Module, classes: list[ast.ClassDef]) -> list[tuple[Function, str]]:
-    """Module-level functions and methods, with their scope name (`f` or `Class.f`)."""
-    found = [(node, node.name) for node in tree.body if isinstance(node, Function)]
-    return found + [(method, f"{cls.name}.{method.name}") for cls in classes for method in methods(cls)]
+def functions(tree: ast.Module, classes: list[ast.ClassDef], names: dict[ast.AST, str]) -> list[tuple[Function, str]]:
+    """Module-level functions and methods, with their scope: the qualname (`f`, `Outer.Inner.f`)."""
+    found = [node for node in tree.body if isinstance(node, Function)]
+    return [(node, names[node]) for node in found + [method for cls in classes for method in methods(cls)]]
 
 
 # --- single-file rules (every edit) -----------------------------------------------------
@@ -186,11 +173,12 @@ def file_findings(source: str, path: str) -> list[Finding]:
     tree = None if is_test_file(Path(path)) or path.endswith(".pyi") else parse(source)
     if tree is None:
         return []
-    classes = class_defs(tree)
+    names = qualnames(tree)
+    classes = class_defs(names)
     standalone = [cls for cls in classes if not base_names(cls)]  # a subclass's methods may be called by its base
-    defs = functions(tree, standalone)
+    defs = functions(tree, standalone, names)
     found = [
-        Finding("SLP002", cls.lineno, message, cls.name, "") for cls in classes if (message := class_as_function(cls))
+        Finding("SLP002", cls.lineno, message, names[cls], "") for cls in classes if (message := class_as_function(cls))
     ]
     found += [
         Finding("SLP004", function.lineno, message, scope, "")
@@ -203,25 +191,14 @@ def file_findings(source: str, path: str) -> list[Finding]:
 # --- project rules (finish) ---------------------------------------------------------------
 
 
-def ancestors(name: str, parents: dict[str, set[str]]) -> set[str]:
-    """Every base above a class, by name, through any number of levels."""
-    seen: set[str] = set()
-    todo = [name]
-    while todo:
-        for base in parents.get(todo.pop(), set()) - seen:
-            seen.add(base)
-            todo.append(base)
-    return seen
-
-
-def one_implementation(interface: ast.ClassDef, concrete: list[tuple[str, set[str], set[str]]]) -> str | None:
+def one_implementation(interface: ast.ClassDef, key: str, concrete: list[tuple[str, set[str], set[str]]]) -> str | None:
     """SLP001: an ABC or Protocol that only one class implements, by subclassing it (at any
-    depth) or, for a Protocol, by defining all its methods."""
-    wanted = {m.name for m in methods(interface) if not is_dunder(m.name)}
+    depth) or, for a Protocol, by defining all its methods. `key` is the interface's full id."""
+    wanted = {m.name for m in methods(interface)} - set(dir(object))  # every class has these
     protocol = "Protocol" in base_names(interface)
-    found = [
-        name for name, above, own in concrete if interface.name in above or (protocol and wanted and wanted <= own)
-    ]
+    if protocol and "__call__" in wanted:
+        return None  # plain functions satisfy a callback Protocol
+    found = [name for name, above, own in concrete if key in above or (protocol and wanted and wanted <= own)]
     if len(found) > 1 or (protocol and not found):  # a Protocol may describe types from outside the project
         return None
     if not found:
@@ -252,27 +229,26 @@ def project_findings(sources: dict[str, str]) -> list[Finding]:
     """Project rules over {path: source}: SLP001, SLP005, and one SLP006 entry per class for
     `class_budget` to count once the base comparison has kept only the new ones."""
     trees = {path: tree for path, source in sources.items() if not path.endswith(".pyi") and (tree := parse(source))}
-    classes = {path: class_defs(tree) for path, tree in trees.items() if not is_test_file(Path(path))}
-    every = [cls for found in classes.values() for cls in found]
-    parents: dict[str, set[str]] = {}
+    names = {path: qualnames(tree) for path, tree in trees.items() if not is_test_file(Path(path))}
+    classes = {path: class_defs(found) for path, found in names.items()}
+    ids, above = hierarchy(names)
     own: dict[str, set[str]] = {}
-    for cls in every:
-        parents.setdefault(cls.name, set()).update(base_names(cls))
-        own.setdefault(cls.name, set()).update(m.name for m in methods(cls))
-    above = {name: ancestors(name, parents) for name in parents}
-    concrete = [  # (name, ancestors, method names, inherited ones included) for each non-interface
-        (cls.name, above[cls.name], set().union(*(own.get(name, set()) for name in {cls.name, *above[cls.name]})))
-        for cls in every
+    for cls, key in ids.items():
+        own.setdefault(key, set()).update(m.name for m in methods(cls))
+    concrete = [  # (qualname, ancestors, method names, inherited ones included) for each non-interface
+        (names[path][cls], above[ids[cls]], set().union(*(own.get(key, set()) for key in {ids[cls], *above[ids[cls]]})))
+        for path, here in classes.items()
+        for cls in here
         if not is_interface(cls)
     ]
     uses = references(trees.values())  # tests count as uses
     found = []
     for path, here in classes.items():
-        defs = functions(trees[path], here)
+        defs, qual = functions(trees[path], here, names[path]), names[path]
         candidates = [
-            Finding("SLP001", cls.lineno, message, cls.name, "")
+            Finding("SLP001", cls.lineno, message, qual[cls], "")
             for cls in here
-            if is_interface(cls) and (message := one_implementation(cls, concrete))
+            if is_interface(cls) and (message := one_implementation(cls, ids[cls], concrete))
         ]
         candidates += [
             Finding("SLP005", function.lineno, message, scope, "")
@@ -280,7 +256,7 @@ def project_findings(sources: dict[str, str]) -> list[Finding]:
             if (message := single_use_helper(function, uses))
         ]
         candidates += [
-            Finding("SLP006", cls.lineno, cls.name, cls.name, "") for cls in here if not is_exception(above[cls.name])
+            Finding("SLP006", cls.lineno, qual[cls], qual[cls], "") for cls in here if not is_exception(above[ids[cls]])
         ]
         found += placed(path, sources[path], [*here, *(function for function, _ in defs)], candidates)
     return found
