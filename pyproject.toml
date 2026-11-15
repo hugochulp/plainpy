@@ -7,6 +7,8 @@ pythonpath = ["scripts"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+# slopcheck fixtures are deliberately sloppy.
+extend-exclude = ["tests/slopcheck"]
 
 [tool.ruff.lint]
 select = [
@@ -32,3 +34,4 @@ max-statements = 40
 [tool.basedpyright]
 # Hook scripts run as standalone scripts and import their siblings (`from _common import ...`).
 extraPaths = ["scripts"]
+exclude = ["tests/slopcheck"]

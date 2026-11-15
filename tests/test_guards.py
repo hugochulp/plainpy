@@ -66,6 +66,8 @@ def pyproject(tmp_path: Path) -> Path:
         "# pylint: disable=too-many-branches",
         "# noqa -- this one has a reason but no rule code",
         "# noqa: E501 -- too short",
+        "# slopcheck: allow SLP004",
+        "# slopcheck: allow -- no rule named here",
     ],
 )
 def test_unexplained_suppressions_are_denied(module: Path, comment: str) -> None:
@@ -91,6 +93,7 @@ def test_file_wide_suppressions_are_always_denied(module: Path, comment: str) ->
         "# noqa: C901 -- parser mirrors the spec grammar",
         "# type: ignore[no-untyped-call] -- vendor SDK ships without stubs",
         "# pragma: no cover -- only reachable on Windows hosts",
+        "# slopcheck: allow SLP004 -- old name kept for callers",
     ],
 )
 def test_explained_suppressions_pass(module: Path, comment: str) -> None:

@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""PostToolUse hook: autofix, lint and complexity-check one edited Python file.
+"""PostToolUse hook: autofix, lint, complexity- and slopcheck one edited Python file.
 
 Only findings that are new since the base revision block: a finding that
 already existed at the base (same rule, same enclosing function, same line
@@ -49,6 +49,7 @@ from _findings import (
     scope_of,
     scope_spans,
 )
+from slopcheck import file_findings
 
 RUFF_RULES = (
     "E4", "E7", "E9", "W", "F", "I", "B", "UP", "SIM", "C4", "C90", "PL", "RET", "ARG",
@@ -174,7 +175,8 @@ def complexity_findings(run: Run, source: str, workdir: Path) -> list[Finding]:
 
 def collect(run: Run, source: str, workdir: Path, *, per_edit: bool) -> list[Finding]:
     workdir.mkdir()
-    return ruff_findings(run, source, per_edit=per_edit) + complexity_findings(run, source, workdir)
+    lint = ruff_findings(run, source, per_edit=per_edit) + complexity_findings(run, source, workdir)
+    return lint + file_findings(source, run.shown_path)
 
 
 def base_source(run: Run) -> str | None:

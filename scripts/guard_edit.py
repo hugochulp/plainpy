@@ -16,23 +16,22 @@ the file as it is now, so existing suppressions and config never trigger.
 
 from __future__ import annotations
 
-import io
 import re
-import tokenize
 import tomllib
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from _common import CONFIG_FILES, PYTHON_SUFFIXES, pre_tool_decision, read_hook_input
+from slopcheck import ALLOW_CODES, comments_by_line
 
 FILE_WIDE = re.compile(
     r"#\s*(ruff:\s*noqa|flake8:\s*noqa|mypy:\s*ignore-errors|pylint:\s*skip-file|pyright:\s*basic)", re.IGNORECASE
 )
 LINE_LEVEL = re.compile(
     r"#\s*(?P<kind>noqa|type:\s*ignore|pyright:\s*ignore|pyrefly:\s*ignore|ty:\s*ignore"
-    r"|pylint:\s*disable|pragma:\s*no\s*cover)"
-    r"(?P<codes>:\s*[\w-]+(?:\s*,\s*[\w-]+)*|\[[^\]]+\]|=[\w,-]+)?",
+    r"|pylint:\s*disable|pragma:\s*no\s*cover|slopcheck:\s*allow)"
+    rf"(?P<codes>:\s*[\w-]+(?:\s*,\s*[\w-]+)*|\[[^\]]+\]|=[\w,-]+|\s+{ALLOW_CODES})?",
     re.IGNORECASE,
 )
 REASON = re.compile(r"\s--\s+\S+(?:\s+\S+){2,}")
@@ -63,15 +62,6 @@ def after_edit(tool_input: dict[str, Any], before: str) -> str | None:
     return text
 
 
-def comments(source: str) -> list[str]:
-    """Comment text only, so a `# noqa` inside a string literal is not a suppression."""
-    try:
-        tokens = tokenize.generate_tokens(io.StringIO(source).readline)
-        return [token.string for token in tokens if token.type == tokenize.COMMENT]
-    except (tokenize.TokenError, SyntaxError):
-        return [line[line.index("#") :] for line in source.splitlines() if "#" in line]
-
-
 def suppression_problem(comment: str) -> str | None:
     if FILE_WIDE.search(comment):
         return f"File-wide suppression `{comment.strip()}` is never allowed. Fix the code instead."
@@ -86,7 +76,7 @@ def suppression_problem(comment: str) -> str | None:
 
 def added_suppressions(before: str, after: str) -> list[str]:
     """Suppression comments in `after` that were not in `before`."""
-    added = Counter(comments(after)) - Counter(comments(before))
+    added = Counter(comments_by_line(after).values()) - Counter(comments_by_line(before).values())
     return [comment for comment in added.elements() if FILE_WIDE.search(comment) or LINE_LEVEL.search(comment)]
 
 

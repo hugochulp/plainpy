@@ -116,6 +116,15 @@ def test_renamed_file_keeps_its_old_problems_unblamed(repo: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_pass_through_wrapper_blocks(repo: Path) -> None:
+    start_session(repo)
+    module = repo / "wrappers.py"
+    module.write_text("from app import ok\n\n\ndef bump(x: int) -> int:\n    return ok(x)\n")
+    result = edit(module)
+    assert result.returncode == 2
+    assert "SLP004 `bump` only passes its arguments on to `ok`" in result.stderr
+
+
 def test_worsening_existing_complexity_blocks(repo: Path) -> None:
     start_session(repo)
     app = repo / "app.py"
