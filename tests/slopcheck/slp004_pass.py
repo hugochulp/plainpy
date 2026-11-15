@@ -31,5 +31,7 @@ def cleaned(text: str) -> str:
     return str(text.strip())
 
 
-def legacy(width: int, height: int) -> int:  # slopcheck: allow SLP004 -- old name kept for callers
+def legacy(
+    width: int, height: int
+) -> int:  # slopcheck: allow SLP004 -- old name kept for callers
     return area(width, height)

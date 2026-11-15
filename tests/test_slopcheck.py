@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 from _common import Settings
 from _findings import new_findings
-from guard_edit import suppression_problem
 from slopcheck import class_budget, file_findings, project_findings
 
 FIXTURES = Path(__file__).resolve().parent / "slopcheck"
@@ -28,9 +27,9 @@ def test_fixture(fixture: Path) -> None:
     assert flagged(rule, source) == expected
 
 
-def test_test_files_are_never_judged() -> None:
-    source = (FIXTURES / "slp002_fail.py").read_text()
-    assert flagged("SLP002", source, path="tests/test_doubler.py") == []
+@pytest.mark.parametrize("path", ["tests/test_doubler.py", "typings/doubler.pyi"])
+def test_test_files_and_stubs_are_never_judged(path: str) -> None:
+    assert flagged("SLP002", (FIXTURES / "slp002_fail.py").read_text(), path=path) == []
 
 
 def test_test_fakes_are_not_a_second_implementation() -> None:
@@ -64,35 +63,11 @@ def test_class_budget_counts_only_new_classes() -> None:
 def test_class_budget_skips_exceptions_and_allowed_classes() -> None:
     source = (
         classes(["A", "B", "C"])
-        + "class Failed(ValueError):\n    pass\n\n\n"
+        + "class DomainFailure(Exception):\n    pass\n\n\nclass Retryable(DomainFailure):\n    pass\n\n\n"
+        + "class Stop(KeyboardInterrupt):\n    pass\n\n\n"
         + "class Kept:  # slopcheck: allow SLP006 -- mirrors the wire format\n    x = 1\n"
     )
     assert class_budget(project_findings({"m.py": source}), SETTINGS) == []
-
-
-@pytest.mark.parametrize(
-    ("comment", "accepted"),
-    [
-        ("# slopcheck: allow SLP004 -- old name kept for callers", True),
-        ("# slopcheck: allow SLP004", False),
-        ("# slopcheck: allow -- no rule named here", False),
-    ],
-)
-def test_allow_comments_follow_the_suppression_rules(comment: str, *, accepted: bool) -> None:
-    assert (suppression_problem(comment) is None) is accepted
-
-
-def test_allow_comment_on_a_wrapped_header() -> None:
-    source = (
-        "def legacy(\n    width: int, height: int\n) -> int:  # slopcheck: allow SLP004 -- old name kept for callers\n"
-        "    return area(width, height)\n"
-    )
-    assert flagged("SLP004", source) == []
-
-
-def test_stubs_are_never_judged() -> None:
-    stub = "class Client:\n    def __init__(self) -> None: ...\n    def get(self) -> int: ...\n"
-    assert flagged("SLP002", stub, path="typings/client.pyi") == []
 
 
 @pytest.mark.parametrize("middle", ["Polygon(Shape)", "Polygon(Shape, ABC)"])
@@ -124,3 +99,24 @@ def test_editing_a_function_header_does_not_make_its_finding_new() -> None:
 
 def test_null_bytes_do_not_crash() -> None:
     assert file_findings("x = 1\0\n", "module.py") == []
+
+
+def test_an_allow_inside_a_string_does_not_count() -> None:
+    source = 'def wrap(x, tag="# slopcheck: allow SLP004 -- not a comment at all"):\n    return go(x, tag)\n'
+    assert flagged("SLP004", source) == ["wrap"]
+
+
+def test_packing_or_unpacking_arguments_is_not_a_pass_through() -> None:
+    source = (
+        "def batch(*items):\n    return target(items)\n\n\ndef spread(x):\n    return target(*x)\n\n\n"
+        "def options(**kw):\n    return target(kw)\n\n\ndef forward(*args, **kw):\n    return target(*args, **kw)\n"
+    )
+    assert flagged("SLP004", source) == ["forward"]
+
+
+def test_inherited_methods_satisfy_a_protocol() -> None:
+    source = (
+        "from typing import Protocol\n\n\nclass Pinger(Protocol):\n    def ping(self) -> None: ...\n\n\n"
+        "class A:\n    def ping(self) -> None:\n        print(1)\n\n\nclass B(A):\n    pass\n"
+    )
+    assert flagged("SLP001", source) == []

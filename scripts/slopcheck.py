@@ -10,7 +10,10 @@ stubs are never judged. A rule can be allowed on one definition with a comment o
 from __future__ import annotations
 
 import ast
+import builtins
+import io
 import re
+import tokenize
 import warnings
 from collections import Counter
 from collections.abc import Iterable
@@ -25,6 +28,9 @@ ALLOW_CODES = r"SLP\d+(?:\s*,\s*SLP\d+)*"  # also used by guard_edit, so both re
 ALLOW = re.compile(rf"#\s*slopcheck:\s*allow\s+(?P<codes>{ALLOW_CODES})", re.IGNORECASE)
 INTERFACE_BASES = {"ABC", "Protocol"}
 MAX_HELPER_STATEMENTS = 3
+BUILTIN_EXCEPTIONS = frozenset(
+    name for name, value in vars(builtins).items() if isinstance(value, type) and issubclass(value, BaseException)
+)
 
 Function = ast.FunctionDef | ast.AsyncFunctionDef
 
@@ -37,21 +43,30 @@ def parse(source: str) -> ast.Module | None:
         return None
 
 
+def comments_by_line(source: str) -> dict[int, str]:
+    """Real comments only, so a suppression inside a string literal doesn't count."""
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+        return {token.start[0]: token.string for token in tokens if token.type == tokenize.COMMENT}
+    except (tokenize.TokenError, SyntaxError):
+        return {n: line[line.index("#") :] for n, line in enumerate(source.splitlines(), 1) if "#" in line}
+
+
 def placed(path: str, source: str, definitions: list[ast.ClassDef | Function], found: list[Finding]) -> list[Finding]:
     """Fill in each finding's file, and drop the ones an allow comment on the header of its
     definition covers. Findings carry no line text: their scope names the definition, so
     editing its header doesn't make an old finding look new."""
     if not found:
         return []
-    lines = source.splitlines()
     body_starts = {node.lineno: node.body[0].lineno for node in definitions}
+    comments = comments_by_line(source) if "slopcheck" in source else {}
     kept = []
     for finding in found:
-        header = lines[finding.line - 1 : max(finding.line, body_starts[finding.line] - 1)]
+        header = range(finding.line, max(finding.line, body_starts[finding.line] - 1) + 1)
         allowed = [
             code
             for line in header
-            if (match := ALLOW.search(line))
+            if (match := ALLOW.search(comments.get(line, "")))
             for code in re.findall(r"SLP\d+", match["codes"].upper())
         ]
         if finding.rule not in allowed:
@@ -77,8 +92,9 @@ def is_interface(cls: ast.ClassDef) -> bool:
     return metaclass or bool(base_names(cls) & INTERFACE_BASES)
 
 
-def is_exception(cls: ast.ClassDef) -> bool:
-    return any(name.endswith(("Error", "Exception", "Warning")) for name in base_names(cls))
+def is_exception(above: set[str]) -> bool:
+    """`above` holds every ancestor's name."""
+    return any(name in BUILTIN_EXCEPTIONS or name.endswith(("Error", "Exception", "Warning")) for name in above)
 
 
 def statements(function: Function) -> list[ast.stmt]:
@@ -123,17 +139,19 @@ def class_as_function(cls: ast.ClassDef) -> str | None:
 
 
 def forwarded(call: ast.Call) -> list[tuple[str, bool]] | None:
-    """(name, passed by position) for each argument, if every one is a bare parameter name."""
+    """(name, passed by position) for each argument, if every one is a bare parameter name.
+    Unpacked arguments keep their `*` or `**`, so packing or unpacking never matches."""
     names = []
     for arg in call.args:
-        value = arg.value if isinstance(arg, ast.Starred) else arg
+        starred = isinstance(arg, ast.Starred)
+        value = arg.value if starred else arg
         if not isinstance(value, ast.Name):
             return None
-        names.append((value.id, True))
+        names.append(("*" * starred + value.id, True))
     for keyword in call.keywords:
         if not isinstance(keyword.value, ast.Name) or keyword.arg not in {None, keyword.value.id}:
             return None
-        names.append((keyword.value.id, False))
+        names.append(("**" * (keyword.arg is None) + keyword.value.id, False))
     return names
 
 
@@ -152,7 +170,7 @@ def pass_through(function: Function, *, method: bool) -> str | None:
     if method and positional[:1] == ["self"]:
         positional = positional[1:]
     params = [*positional, *(a.arg for a in arguments.kwonlyargs)]
-    params += [a.arg for a in (arguments.vararg, arguments.kwarg) if a]
+    params += [prefix + a.arg for prefix, a in (("*", arguments.vararg), ("**", arguments.kwarg)) if a]
     names = forwarded(value)
     if not params or names is None or sorted(name for name, _ in names) != sorted(params):
         return None
@@ -184,8 +202,6 @@ def file_findings(source: str, path: str) -> list[Finding]:
 
 # --- project rules (finish) ---------------------------------------------------------------
 
-Concrete = tuple[str, set[str], set[str]]  # a class that isn't an interface: (name, ancestors, method names)
-
 
 def ancestors(name: str, parents: dict[str, set[str]]) -> set[str]:
     """Every base above a class, by name, through any number of levels."""
@@ -198,7 +214,7 @@ def ancestors(name: str, parents: dict[str, set[str]]) -> set[str]:
     return seen
 
 
-def one_implementation(interface: ast.ClassDef, concrete: list[Concrete]) -> str | None:
+def one_implementation(interface: ast.ClassDef, concrete: list[tuple[str, set[str], set[str]]]) -> str | None:
     """SLP001: an ABC or Protocol that only one class implements, by subclassing it (at any
     depth) or, for a Protocol, by defining all its methods."""
     wanted = {m.name for m in methods(interface) if not is_dunder(m.name)}
@@ -239,10 +255,13 @@ def project_findings(sources: dict[str, str]) -> list[Finding]:
     classes = {path: class_defs(tree) for path, tree in trees.items() if not is_test_file(Path(path))}
     every = [cls for found in classes.values() for cls in found]
     parents: dict[str, set[str]] = {}
+    own: dict[str, set[str]] = {}
     for cls in every:
         parents.setdefault(cls.name, set()).update(base_names(cls))
-    concrete = [
-        (cls.name, ancestors(cls.name, parents), {m.name for m in methods(cls)})
+        own.setdefault(cls.name, set()).update(m.name for m in methods(cls))
+    above = {name: ancestors(name, parents) for name in parents}
+    concrete = [  # (name, ancestors, method names, inherited ones included) for each non-interface
+        (cls.name, above[cls.name], set().union(*(own.get(name, set()) for name in {cls.name, *above[cls.name]})))
         for cls in every
         if not is_interface(cls)
     ]
@@ -260,7 +279,9 @@ def project_findings(sources: dict[str, str]) -> list[Finding]:
             for function, scope in defs
             if (message := single_use_helper(function, uses))
         ]
-        candidates += [Finding("SLP006", cls.lineno, cls.name, cls.name, "") for cls in here if not is_exception(cls)]
+        candidates += [
+            Finding("SLP006", cls.lineno, cls.name, cls.name, "") for cls in here if not is_exception(above[cls.name])
+        ]
         found += placed(path, sources[path], [*here, *(function for function, _ in defs)], candidates)
     return found
 
