@@ -13,6 +13,7 @@ from _common import Settings
 from _findings import Finding, ToolError
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+SETTINGS = Settings(profile="standard", blocking=True, cognitive_max=15, mccabe_max=10)
 
 PYPROJECT = """\
 [project]
@@ -379,8 +380,7 @@ def test_a_base_that_cannot_be_checked_never_blocks(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(gate, "TREE_CHECKS", {"dead code": check})
     monkeypatch.setattr(gate, "python_files_in", lambda *_: ["m.py"])
     monkeypatch.setattr(gate, "base_findings", lambda *_: {"dead code": ToolError("vulture timed out after 150 s")})
-    settings = Settings(profile="standard", blocking=True, cognitive_max=15, mccabe_max=10)
-    change = gate.Change(tmp_path, tmp_path, ".", "b", "c", settings, ["m.py"], {}, frozenset())
+    change = gate.Change(tmp_path, tmp_path, ".", "b", "c", SETTINGS, ["m.py"], {}, frozenset())
     [section] = gate.tree_sections(change, tmp_path)
     assert section.findings == []
     assert not section.blocking
@@ -402,6 +402,17 @@ def test_slopcheck_runs_at_finish(repo: Path) -> None:
     assert "SLP005 `_label` is used once" in reason
 
 
+def test_placeholders_block_and_defensive_checks_warn(repo: Path) -> None:
+    start(repo)
+    (repo / "src" / "demo" / "shapes.py").write_text(
+        "def area(side: int) -> int:\n    if isinstance(side, int):\n        return side * side\n    return 0\n\n\n"
+        "def perimeter(side: int) -> int:\n    raise NotImplementedError\n"
+    )
+    reason = stop()["reason"]
+    assert "SLP008 `perimeter` is a placeholder (only `raise NotImplementedError`)" in reason
+    assert "Types (basedpyright), warnings:\n  src/demo/shapes.py:2 SLP009 Unnecessary isinstance call" in reason
+
+
 def test_class_budget_at_finish(repo: Path) -> None:
     (repo / ".plainpy.toml").write_text("[overrides]\nclass_budget = 1\n")
     git(repo, "add", "-A")
@@ -410,3 +421,29 @@ def test_class_budget_at_finish(repo: Path) -> None:
     records = "".join(f"class Record{n}:\n    size = {n}\n\n\n" for n in range(2))
     (repo / "src" / "demo" / "records.py").write_text(records)
     assert "SLP006 2 new classes, budget 1: Record0 (src/demo/records.py)" in stop()["reason"]
+
+
+@pytest.mark.parametrize(
+    ("rule", "severity", "profile", "expected"),
+    [
+        ("reportUnnecessaryIsInstance", "warning", "standard", "SLP009"),
+        ("reportUnnecessaryComparison", "warning", "strict", "SLP009"),
+        ("reportUnnecessaryIsInstance", "error", "standard", "SLP009"),  # basedpyright's own strict mode
+        ("reportUnknownMemberType", "warning", "standard", None),
+        ("reportUnknownMemberType", "warning", "strict", "reportUnknownMemberType"),
+        (None, "error", "standard", "type-error"),
+        ("reportUnusedVariable", "information", "strict", None),
+    ],
+)
+def test_type_rules(rule: str | None, severity: str, profile: str, expected: str | None) -> None:
+    assert gate.type_rule({"rule": rule, "severity": severity}, warnings=profile == "strict") == expected
+
+
+def test_a_diagnostic_without_a_range_is_a_whole_file_finding(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text("import m\n")
+    cycle = {"file": str(tmp_path / "m.py"), "severity": "error", "rule": "reportImportCycles", "message": "Cycle"}
+    output = json.dumps({"generalDiagnostics": [cycle]})
+    monkeypatch.setattr(gate, "run_tool", lambda *_, **__: subprocess.CompletedProcess([], 1, output, ""))
+    change = gate.Change(tmp_path, tmp_path, ".", "b", "c", SETTINGS, ["m.py"], {}, frozenset())
+    [finding] = gate.types_in(tmp_path, ["m.py"], change)
+    assert (finding.rule, finding.line, finding.file) == ("reportImportCycles", 0, "m.py")

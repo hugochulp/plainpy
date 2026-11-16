@@ -49,7 +49,7 @@ from _findings import (
     scope_of,
     scope_spans,
 )
-from slopcheck import file_findings
+from slopcheck.edit_rules import file_findings
 
 RUFF_RULES = (
     "E4", "E7", "E9", "W", "F", "I", "B", "UP", "SIM", "C4", "C90", "PL", "RET", "ARG",

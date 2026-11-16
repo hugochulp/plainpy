@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from _common import CONFIG_FILES, PYTHON_SUFFIXES, pre_tool_decision, read_hook_input
-from slopcheck import ALLOW_CODES, comments_by_line
+from slopcheck.shared import ALLOW_CODES, comments_by_line
 
 FILE_WIDE = re.compile(
     r"#\s*(ruff:\s*noqa|flake8:\s*noqa|mypy:\s*ignore-errors|pylint:\s*skip-file|pyright:\s*basic)", re.IGNORECASE

@@ -51,6 +51,13 @@ The hook prints the file, line, rule and limit. Fix the cause:
 | Pass-through wrapper (SLP004) | Call the wrapped function directly and delete the wrapper | Add a trivial step to the wrapper |
 | Single-use tiny helper (SLP005) | Inline it at its one call site | Call it twice to pass the check |
 | Class budget (SLP006) | Merge classes, or use functions and dataclasses; if each class is needed, tell the user why | Turn classes into dicts of lambdas |
+| Pydantic model away from I/O (SLP003) | Use a dataclass or plain values; if it mirrors a wire format plainpy can't see, add `# slopcheck: allow SLP003 -- reason` | Add a pointless `model_dump()` call |
+| Unused option (SLP007) | Drop the parameter and use its default value inline | Pass the default at a call site to keep it |
+| Placeholder code (SLP008) | Write the real body, or delete the function and its callers' expectations | Return a dummy value or log a TODO |
+| Defensive check (SLP009) | Delete the `isinstance` or `None` check the types already guarantee | Widen the parameter's type to justify the check |
+| Wide module or grab-bag name (SLP010) | Move functions next to their callers; make helpers private | Rename `utils.py` to `misc.py` |
+| Too many exception classes (SLP011) | Raise built-in exceptions (`ValueError`, `KeyError`) with a clear message; add a class only when a caller catches it | Nest them in one module to look smaller |
+| Schema with several models over the class budget (SLP006) | If every model is part of the schema, tell the user, or allow it: `# slopcheck: allow SLP006 -- part of the API schema` | Flatten the schema into dicts |
 | Duplicated code (R0801) | Keep one copy, next to its callers | Move it into a new `utils.py` |
 | Failing test | Fix the code, or the test if the test is wrong and the user agrees | Delete, skip or weaken the test |
 | Any rule | Change the code | Add `# noqa`, `# type: ignore`, or edit lint config |
