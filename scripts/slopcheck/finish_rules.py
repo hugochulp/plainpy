@@ -27,6 +27,7 @@ EXCEPTION_BUDGET = 2
 GRAB_BAGS = {"utils.py", "helpers.py", "common.py"}
 MODEL_BASES = {"BaseModel", "RootModel"}
 NOT_MODELS = {"BaseSettings", "SQLModel"}  # settings and tables: the framework does their I/O
+VALIDATORS = ("model_validate", "model_json_schema", "parse_")  # take their class to I/O
 NOT_IO = {"isinstance", "issubclass", "cast"}  # take a class without it reaching I/O
 AWAY_FROM_IO = "`{}` never reaches I/O"  # short, so a grouped report line names every model
 BUILTIN_EXCEPTIONS = frozenset(
@@ -78,9 +79,7 @@ def passed(call: ast.Call) -> set[str]:
         return set()
     values = [*call.args, *(k.value for k in call.keywords)]
     found = {name for v in values if isinstance(v, ast.Name | ast.Attribute | ast.Subscript) for name in names_in(v)}
-    if isinstance(call.func, ast.Attribute) and call.func.attr.startswith(
-        ("model_validate", "model_json_schema", "parse_")
-    ):
+    if isinstance(call.func, ast.Attribute) and call.func.attr.startswith(VALIDATORS):
         found |= names_in(call.func)
     if any(k.arg is None for k in call.keywords):
         found.add(callee)
@@ -101,10 +100,10 @@ def handled(function: Function, *, may_dump: bool) -> set[str]:
 def reaching_io(
     files: Iterable[tuple[ast.Module, str]], models: set[ast.ClassDef], framework: set[str], renamed: dict[str, str]
 ) -> set[str]:
-    """SLP003: names of models that reach I/O, directly or as a field type, base or subclass of
-    one that does. `files` holds each non-test file's tree and source; `framework` names the
-    settings and table classes, whose I/O the framework does; `models` includes them;
-    `renamed` maps import aliases to the names they stand for."""
+    """SLP003: names of models that reach I/O, directly or as a field type, base, subclass or
+    import alias of one that does. `files` holds each non-test file's tree and source;
+    `framework` names the settings and table classes, whose I/O the framework does; `models`
+    includes them; `renamed` maps import aliases to the names they stand for."""
     found = framework | {cls.name for cls in models if dumps(cls)}  # a model that dumps itself
     for tree, source in files:
         may_dump = "model_dump" in source
@@ -113,13 +112,12 @@ def reaching_io(
                 found |= passed(node)
             elif isinstance(node, Function):
                 found |= handled(node, may_dump=may_dump)
-    found |= {renamed[name] for name in found & renamed.keys()}
-    links: defaultdict[str, set[str]] = defaultdict(set)
+    links: defaultdict[str, set[str]] = defaultdict(set, {alias: {name} for alias, name in renamed.items()})
     known = {cls.name for cls in models}  # never `BaseModel`, which would link every model to every other
     for cls in models:
         fields = (node.annotation for node in cls.body if isinstance(node, ast.AnnAssign))
         links[cls.name] |= {name for field in fields for name in names_in(field)}
-        for base in base_names(cls) & known:
+        for base in {renamed.get(name, name) for name in base_names(cls)} & known:
             links[cls.name].add(base)
             links[base].add(cls.name)
     return found.union(*(ancestors(name, links) for name in found & links.keys()))
@@ -250,8 +248,7 @@ def project_findings(sources: dict[str, str]) -> list[Finding]:
     models = {cls for cls in pydantic if not above[ids[cls]] & NOT_MODELS}
     framework = {cls.name for cls in pydantic - models}
     uses, calls, renamed = references(trees.values())  # tests count as uses and calls
-    files = [(trees[path], sources[path]) for path in names]
-    at_io = reaching_io(files, pydantic, framework, renamed) if models else set[str]()
+    at_io = reaching_io([(trees[p], sources[p]) for p in names], pydantic, framework, renamed) if models else set[str]()
     subclassed = set[str]().union(*above.values())
     overridable = {m for cls in ids if base_names(cls) or {cls.name, ids[cls]} & subclassed for m in methods(cls)}
     promised = {m.name for cls in ids if is_interface(cls) for m in methods(cls)}  # a Protocol's no-op may be real
@@ -274,7 +271,7 @@ def project_findings(sources: dict[str, str]) -> list[Finding]:
             exempt = bool(function.decorator_list) or is_dunder(function.name) or shared
             candidates += function_findings(function, scope, uses, calls[function.name], exempt=exempt)
         candidates += nested_placeholders(qual, {function for function, _ in defs}, uses, calls)
-        found += placed(path, sources[path], [n for n in qual if isinstance(n, ast.ClassDef | Function)], candidates)
+        found += placed(path, sources[path], qual, candidates)
         found += over_wide(path, trees[path])
     return found
 

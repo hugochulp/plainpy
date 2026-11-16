@@ -13,6 +13,7 @@ from _common import Settings
 from _findings import Finding, ToolError
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+SETTINGS = Settings(profile="standard", blocking=True, cognitive_max=15, mccabe_max=10)
 
 PYPROJECT = """\
 [project]
@@ -379,8 +380,7 @@ def test_a_base_that_cannot_be_checked_never_blocks(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(gate, "TREE_CHECKS", {"dead code": check})
     monkeypatch.setattr(gate, "python_files_in", lambda *_: ["m.py"])
     monkeypatch.setattr(gate, "base_findings", lambda *_: {"dead code": ToolError("vulture timed out after 150 s")})
-    settings = Settings(profile="standard", blocking=True, cognitive_max=15, mccabe_max=10)
-    change = gate.Change(tmp_path, tmp_path, ".", "b", "c", settings, ["m.py"], {}, frozenset())
+    change = gate.Change(tmp_path, tmp_path, ".", "b", "c", SETTINGS, ["m.py"], {}, frozenset())
     [section] = gate.tree_sections(change, tmp_path)
     assert section.findings == []
     assert not section.blocking
@@ -444,7 +444,6 @@ def test_a_diagnostic_without_a_range_is_a_whole_file_finding(monkeypatch: pytes
     cycle = {"file": str(tmp_path / "m.py"), "severity": "error", "rule": "reportImportCycles", "message": "Cycle"}
     output = json.dumps({"generalDiagnostics": [cycle]})
     monkeypatch.setattr(gate, "run_tool", lambda *_, **__: subprocess.CompletedProcess([], 1, output, ""))
-    settings = Settings(profile="standard", blocking=True, cognitive_max=15, mccabe_max=10)
-    change = gate.Change(tmp_path, tmp_path, ".", "b", "c", settings, ["m.py"], {}, frozenset())
+    change = gate.Change(tmp_path, tmp_path, ".", "b", "c", SETTINGS, ["m.py"], {}, frozenset())
     [finding] = gate.types_in(tmp_path, ["m.py"], change)
     assert (finding.rule, finding.line, finding.file) == ("reportImportCycles", 0, "m.py")

@@ -55,8 +55,7 @@ def pass_through(function: Function, *, method: bool) -> str | None:
         return None
     arguments = function.args
     positional = [a.arg for a in [*arguments.posonlyargs, *arguments.args]]
-    if method and positional[:1] == ["self"]:
-        positional = positional[1:]
+    positional = positional[method and positional[:1] == ["self"] :]
     params = [*positional, *(a.arg for a in arguments.kwonlyargs)]
     params += [prefix + a.arg for prefix, a in (("*", arguments.vararg), ("**", arguments.kwarg)) if a]
     names = forwarded(value)
@@ -86,4 +85,4 @@ def file_findings(source: str, path: str) -> list[Finding]:
         for function, scope in defs
         if (message := pass_through(function, method="." in scope))
     ]
-    return placed(path, source, [*classes, *(function for function, _ in defs)], found)
+    return placed(path, source, names, found)

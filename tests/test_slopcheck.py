@@ -251,7 +251,7 @@ def test_exception_budget_counts_only_new_exception_classes() -> None:
     ("path", "expected"), [("pkg/utils.py", 1), ("pkg/helpers.py", 1), ("pkg/util.py", 0), ("tests/utils.py", 0)]
 )
 def test_grab_bag_module_names(path: str, expected: int) -> None:
-    assert len([f for f in project_findings({path: "X = 1\n"}) if f.rule == "SLP010"]) == expected
+    assert len(flagged("SLP010", "X = 1\n", path)) == expected
 
 
 def test_a_wide_module_warns_again_only_when_it_grows() -> None:
@@ -261,7 +261,7 @@ def test_a_wide_module_warns_again_only_when_it_grows() -> None:
     base = project_findings(module(16))
     assert [f.rule for f in new_findings(project_findings(module(16)), base) if f.rule == "SLP010"] == []
     assert [f.rule for f in new_findings(project_findings(module(17)), base) if f.rule == "SLP010"] == ["SLP010"]
-    assert [f for f in project_findings({"pkg/__init__.py": module(16)["m.py"]}) if f.rule == "SLP010"] == []
+    assert flagged("SLP010", module(16)["m.py"], "pkg/__init__.py") == []
 
 
 MODEL = "from pydantic import BaseModel\n\n\nclass User(BaseModel):{allow}\n    name: str\n"
@@ -333,7 +333,19 @@ def test_calls_through_an_import_alias_pass_an_option() -> None:
     assert [f for f in project_findings({"options.py": module, "client.py": client}) if f.rule == "SLP007"] == []
 
 
-def test_a_model_validated_through_an_import_alias_reaches_io() -> None:
-    api = "from app import User as ApiUser\n\n\ndef load(data: dict) -> ApiUser:\n    return ApiUser.model_validate(data)\n"
+@pytest.mark.parametrize(
+    "api",
+    [
+        "from app import User as ApiUser\n\n\ndef load(data: dict) -> ApiUser:\n    return ApiUser.model_validate(data)\n",
+        "from app import User as U\nfrom pydantic import BaseModel\n\n\nclass Page(BaseModel):\n    users: list[U]\n\n\n"
+        "def load(data: dict) -> Page:\n    return Page.model_validate(data)\n",
+        "from app import User as Base\n\n\nclass Admin(Base):\n    level: int\n\n\n"
+        "def load(data: dict) -> Admin:\n    return Admin.model_validate(data)\n",
+        "from app import User, User as Base\n\n\nclass Admin(Base):\n    level: int\n\n\n"
+        "def load(data: dict) -> User:\n    return User.model_validate(data)\n",
+    ],
+    ids=["validated", "field type", "validated subclass", "validated base"],
+)
+def test_a_model_used_through_an_import_alias_reaches_io(api: str) -> None:
     found = project_findings({"app.py": MODEL.format(allow=""), "api.py": api})
     assert [f for f in found if f.rule == "SLP003"] == []

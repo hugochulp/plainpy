@@ -34,13 +34,13 @@ def comments_by_line(source: str) -> dict[int, str]:
         return {n: line[line.index("#") :] for n, line in enumerate(source.splitlines(), 1) if "#" in line}
 
 
-def placed(path: str, source: str, definitions: list[ast.ClassDef | Function], found: list[Finding]) -> list[Finding]:
+def placed(path: str, source: str, names: dict[ast.AST, str], found: list[Finding]) -> list[Finding]:
     """Fill in each finding's file, and drop the ones an allow comment on the header of its
-    definition covers. Findings carry no line text: their scope names the definition, so
-    editing its header doesn't make an old finding look new."""
+    definition (a class or function among the file's `qualnames`) covers. Findings carry no line
+    text: their scope names the definition, so editing its header doesn't make an old finding look new."""
     if not found:
         return []
-    body_starts = {node.lineno: node.body[0].lineno for node in definitions}
+    body_starts = {node.lineno: node.body[0].lineno for node in names if isinstance(node, ast.ClassDef | Function)}
     comments = comments_by_line(source) if "slopcheck" in source.lower() else {}
     kept = []
     for finding in found:
