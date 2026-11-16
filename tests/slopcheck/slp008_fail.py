@@ -1,4 +1,4 @@
-# expect: Loader.load, handle, parse, todo, version_of
+# expect: Loader.load, handle, parse, run.<locals>.step, todo, version_of
 def todo():
     pass
 
@@ -17,3 +17,10 @@ class Loader:
 
 def version_of(package: str) -> str:
     return "1.0"
+
+
+def run() -> None:
+    def step() -> None:
+        pass
+
+    step()

@@ -98,10 +98,13 @@ def handled(function: Function, *, may_dump: bool) -> set[str]:
     return {name for node in annotations if node for name in names_in(node)}
 
 
-def reaching_io(files: Iterable[tuple[ast.Module, str]], models: set[ast.ClassDef], framework: set[str]) -> set[str]:
+def reaching_io(
+    files: Iterable[tuple[ast.Module, str]], models: set[ast.ClassDef], framework: set[str], renamed: dict[str, str]
+) -> set[str]:
     """SLP003: names of models that reach I/O, directly or as a field type, base or subclass of
     one that does. `files` holds each non-test file's tree and source; `framework` names the
-    settings and table classes, whose I/O the framework does; `models` includes them."""
+    settings and table classes, whose I/O the framework does; `models` includes them;
+    `renamed` maps import aliases to the names they stand for."""
     found = framework | {cls.name for cls in models if dumps(cls)}  # a model that dumps itself
     for tree, source in files:
         may_dump = "model_dump" in source
@@ -110,6 +113,7 @@ def reaching_io(files: Iterable[tuple[ast.Module, str]], models: set[ast.ClassDe
                 found |= passed(node)
             elif isinstance(node, Function):
                 found |= handled(node, may_dump=may_dump)
+    found |= {renamed[name] for name in found & renamed.keys()}
     links: defaultdict[str, set[str]] = defaultdict(set)
     known = {cls.name for cls in models}  # never `BaseModel`, which would link every model to every other
     for cls in models:
@@ -121,17 +125,25 @@ def reaching_io(files: Iterable[tuple[ast.Module, str]], models: set[ast.ClassDe
     return found.union(*(ancestors(name, links) for name in found & links.keys()))
 
 
-def references(trees: Iterable[ast.Module]) -> tuple[Counter[str], defaultdict[str, list[ast.Call]]]:
-    """How often each name is read anywhere (as a name or as an attribute), and the calls to each name."""
+def references(trees: Iterable[ast.Module]) -> tuple[Counter[str], defaultdict[str, list[ast.Call]], dict[str, str]]:
+    """How often each name is read anywhere (as a name or as an attribute), the calls to each
+    name, and what each import alias stands for (`request` for `from x import fetch as request`).
+    Reads and calls through an alias also count for the name it stands for."""
     names: Counter[str] = Counter()
     calls: defaultdict[str, list[ast.Call]] = defaultdict(list)
+    renamed: dict[str, str] = {}
     for tree in trees:
         for node in ast.walk(tree):
             if isinstance(node, ast.Name | ast.Attribute) and isinstance(node.ctx, ast.Load):
                 names[name_of(node)] += 1
             elif isinstance(node, ast.Call):
                 calls[name_of(node.func)].append(node)
-    return names, calls
+            elif isinstance(node, ast.ImportFrom):
+                renamed |= {a.asname: a.name for a in node.names if a.asname and a.asname != a.name}
+    for alias, name in renamed.items():
+        names[name] += names[alias]
+        calls[name] += calls[alias]
+    return names, calls, renamed
 
 
 def single_use_helper(function: Function, uses: Counter[str]) -> str | None:
@@ -195,6 +207,17 @@ def function_findings(
     ]
 
 
+def nested_placeholders(
+    names: dict[ast.AST, str], seen: set[Function], uses: Counter[str], calls: defaultdict[str, list[ast.Call]]
+) -> list[Finding]:
+    """SLP008 for functions inside functions (`names` is the file's `qualnames`; `seen` are the
+    module-level functions and methods). Skips decorated and special ones, and callbacks passed
+    around as values, such as a signal handler that deliberately does nothing."""
+    nested = [n for n in names if isinstance(n, Function) and n not in seen and not n.decorator_list]
+    kept = [n for n in nested if not is_dunder(n.name) and uses[n.name] <= len(calls[n.name])]
+    return [Finding("SLP008", n.lineno, m, names[n], "") for n in kept if (m := placeholder(n, method=False))]
+
+
 def over_wide(path: str, tree: ast.Module) -> list[Finding]:
     """SLP010: a module with too many public functions and classes, or a grab-bag name. Whole-file
     findings, so no allow comment covers them."""
@@ -226,11 +249,12 @@ def project_findings(sources: dict[str, str]) -> list[Finding]:
     pydantic = {cls for cls in ids if above[ids[cls]] & (MODEL_BASES | NOT_MODELS)}
     models = {cls for cls in pydantic if not above[ids[cls]] & NOT_MODELS}
     framework = {cls.name for cls in pydantic - models}
-    at_io = reaching_io([(trees[path], sources[path]) for path in names], pydantic, framework) if models else set[str]()
+    uses, calls, renamed = references(trees.values())  # tests count as uses and calls
+    files = [(trees[path], sources[path]) for path in names]
+    at_io = reaching_io(files, pydantic, framework, renamed) if models else set[str]()
     subclassed = set[str]().union(*above.values())
     overridable = {m for cls in ids if base_names(cls) or {cls.name, ids[cls]} & subclassed for m in methods(cls)}
     promised = {m.name for cls in ids if is_interface(cls) for m in methods(cls)}  # a Protocol's no-op may be real
-    uses, calls = references(trees.values())  # tests count as uses and calls
     found: list[Finding] = []
     for path, here in classes.items():
         defs, qual = functions(trees[path], here, names[path]), names[path]
@@ -249,7 +273,8 @@ def project_findings(sources: dict[str, str]) -> list[Finding]:
             shared = function in overridable or ("." in scope and function.name in promised)
             exempt = bool(function.decorator_list) or is_dunder(function.name) or shared
             candidates += function_findings(function, scope, uses, calls[function.name], exempt=exempt)
-        found += placed(path, sources[path], [*here, *(function for function, _ in defs)], candidates)
+        candidates += nested_placeholders(qual, {function for function, _ in defs}, uses, calls)
+        found += placed(path, sources[path], [n for n in qual if isinstance(n, ast.ClassDef | Function)], candidates)
         found += over_wide(path, trees[path])
     return found
 

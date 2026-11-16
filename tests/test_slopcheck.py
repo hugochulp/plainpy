@@ -325,3 +325,15 @@ def test_grouped_model_findings_name_every_model() -> None:
     source = "from pydantic import BaseModel\n\n\nclass Tag(BaseModel):\n    name: str\n\n\nclass Note(BaseModel):\n    tags: list[Tag]\n"
     found = [f for f in project_findings({"m.py": source}) if f.rule == "SLP003"]
     assert finding_lines(found) == ["m.py SLP003 x2 at lines 4, 8: `Tag` never reaches I/O, `Note` never reaches I/O"]
+
+
+def test_calls_through_an_import_alias_pass_an_option() -> None:
+    module = "def fetch(url: str, timeout: float = 30) -> str:\n    return f'{url} {timeout}'\n\n\nfetch('a')\n"
+    client = "from options import fetch as request\n\nrequest('b', timeout=1)\n"
+    assert [f for f in project_findings({"options.py": module, "client.py": client}) if f.rule == "SLP007"] == []
+
+
+def test_a_model_validated_through_an_import_alias_reaches_io() -> None:
+    api = "from app import User as ApiUser\n\n\ndef load(data: dict) -> ApiUser:\n    return ApiUser.model_validate(data)\n"
+    found = project_findings({"app.py": MODEL.format(allow=""), "api.py": api})
+    assert [f for f in found if f.rule == "SLP003"] == []

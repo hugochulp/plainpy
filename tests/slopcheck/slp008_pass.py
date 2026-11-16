@@ -1,4 +1,5 @@
 # expect:
+import signal
 from abc import ABC, abstractmethod
 from typing import Protocol, overload
 
@@ -40,3 +41,10 @@ def double(x: int | str) -> int | str:
 
 def __getattr__(name: str) -> None:
     return None
+
+
+def serve() -> None:
+    def ignore(signum: int, frame: object) -> None:  # a callback that deliberately does nothing
+        pass
+
+    signal.signal(signal.SIGCHLD, ignore)
