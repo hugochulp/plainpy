@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from _common import (
+    DOC_SUFFIXES,
     emit,
     is_python_project,
     load_settings,
@@ -46,10 +47,18 @@ def known_test_failures(project: Path) -> list[str]:
     return sorted(read_json(project / ".pytest_cache" / "v" / "cache" / "lastfailed"))
 
 
+def new_project(project: Path) -> bool:
+    """Nothing but dotfiles and docs yet, as in a fresh `git init`: what Claude writes here may well be Python."""
+    try:
+        return all(entry.name.startswith(".") or entry.name.endswith(DOC_SUFFIXES) for entry in project.iterdir())
+    except OSError:  # missing or unreadable: nothing to snapshot
+        return False
+
+
 def main() -> None:
     hook_input = read_hook_input()
     project = project_dir(hook_input)
-    if not is_python_project(project):
+    if not (is_python_project(project) or new_project(project)):
         return
     session = session_id(hook_input)
     if hook_input.get("source") in {"startup", "clear"} or "base" not in read_session(project, session):

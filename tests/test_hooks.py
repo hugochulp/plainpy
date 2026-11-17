@@ -80,13 +80,22 @@ def test_session_start_records_base_and_adds_doctrine(repo: Path) -> None:
 
 
 def test_session_start_is_silent_outside_python_projects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    other = tmp_path / "docs"
+    other = tmp_path / "web"
     other.mkdir()
+    (other / "index.js").write_text("console.log(1)\n")
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(other))
     result = run_hook("session_start.py", {"source": "startup", "cwd": str(other)})
     assert result.returncode == 0
     assert result.stdout == ""
+
+
+def test_session_start_is_silent_when_the_project_folder_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gone = tmp_path / "gone"
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(gone))
+    result = run_hook("session_start.py", {"source": "startup", "cwd": str(gone)})
+    assert (result.returncode, result.stdout) == (0, "")
 
 
 def test_new_complex_function_blocks(repo: Path) -> None:

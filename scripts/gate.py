@@ -34,6 +34,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from _common import (
+    DOC_SUFFIXES,
     PYTHON_SUFFIXES,
     SKIP_DIRS,
     Settings,
@@ -67,7 +68,6 @@ MAX_LINES_PER_SECTION = 15
 MAX_REPORT_CHARS = 9000
 MAX_CACHED_BASES = 4
 WHITELIST = "vulture_whitelist.py"
-DOC_SUFFIXES = (".md", ".rst")
 # Any of these from a tool run means "this check could not run", never a crash of the whole hook.
 CHECK_ERRORS = (ToolError, OSError, ValueError, KeyError, TypeError)
 # Cached base results are only valid for the same checks; any edit to these scripts invalidates them.
@@ -158,7 +158,9 @@ def python_files_in(change: Change, tree: str) -> list[str]:
 
 def extract_base_tree(change: Change, dest: Path) -> Path:
     """Write the base snapshot's files into dest (no hooks, no export rules); return the project's folder."""
-    dest.mkdir()
+    (dest / change.prefix).mkdir(parents=True)
+    if git_raw(change.top, "ls-tree", "--name-only", change.base, *pathspec(change.prefix)) == "":
+        return dest / change.prefix  # a new project: nothing to check out, and checkout would refuse
     env = {**os.environ, "GIT_INDEX_FILE": str(dest.with_name("base-index"))}
     args = ["-c", "core.hooksPath=/dev/null", "--work-tree", str(dest), "checkout", change.base, "--", change.prefix]
     if git(change.top, *args, env=env) is None:

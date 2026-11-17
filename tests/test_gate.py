@@ -388,6 +388,20 @@ def test_a_base_that_cannot_be_checked_never_blocks(monkeypatch: pytest.MonkeyPa
     assert "vulture timed out" in section.notes[0]
 
 
+def test_a_fresh_git_init_is_checked_from_its_first_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = tmp_path / "fresh"
+    project.mkdir()
+    git(project, "init", "-q", "-b", "main")  # an empty folder, no commit yet: the base is git's empty tree
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
+    start(project)
+    (project / "main.py").write_text('import os\n\ncount: int = "one"\n')
+    reason = stop()["reason"]
+    assert "F401" in reason
+    assert "reportAssignmentType" in reason
+    assert "could not unpack" not in reason  # the whole-project checks compare against an empty base
+
+
 def test_slopcheck_runs_at_finish(repo: Path) -> None:
     start(repo)
     (repo / "src" / "demo" / "store.py").write_text(

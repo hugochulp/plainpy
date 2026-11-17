@@ -27,6 +27,7 @@ KEPT_SESSIONS = 20
 # Folders never analysed or snapshotted: virtualenvs, build output, caches.
 SKIP_DIRS = frozenset({".venv", "venv", "env", "node_modules", "build", "dist", "__pycache__", ".git", ".tox", ".nox"})
 PYTHON_SUFFIXES = (".py", ".pyi")
+DOC_SUFFIXES = (".md", ".rst")
 # Untracked files bigger than this are left out of snapshots (data dumps, binaries).
 MAX_SNAPSHOT_FILE_BYTES = 1_000_000
 
