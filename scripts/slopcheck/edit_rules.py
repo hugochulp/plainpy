@@ -1,8 +1,9 @@
-"""Single-file rules that check_file runs after every edit: SLP002 and SLP004."""
+"""Single-file rules that check_file runs after every edit: SLP002, SLP004 and SLP012."""
 
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator
 from pathlib import Path
 
 from _findings import Finding, is_test_file
@@ -68,8 +69,76 @@ def pass_through(function: Function, *, method: bool) -> str | None:
     return f"`{function.name}` only passes its arguments on to `{callee}`: call `{callee}` directly"
 
 
+SEQUENCES = ast.List | ast.Tuple | ast.Set
+TABLES = ast.Dict | SEQUENCES
+Definition = ast.ClassDef | Function
+LOGIC = ast.IfExp | ast.BoolOp | ast.Compare | ast.BinOp | ast.UnaryOp  # what a lambda's branches are made of
+
+
+def has_logic(function: ast.Lambda) -> bool:
+    """`lambda a, b: a < b`, `lambda s: s or None` and `lambda v: isinstance(v, str)` have it (a branch's
+    condition or arms); `lambda row: row.name.lower()` and `lambda: []` don't."""
+    return any(
+        isinstance(node, LOGIC) or (isinstance(node, ast.Call) and name_of(node.func) == "isinstance")
+        for node in ast.walk(function.body)
+    )
+
+
+def logic_lambdas(table: ast.expr) -> int:
+    """Lambdas with logic in a table, counted through nested tables (a list of `(name, lambda)` pairs)."""
+    members = table.values if isinstance(table, ast.Dict) else table.elts if isinstance(table, SEQUENCES) else []
+    found = 0
+    for member in members:
+        found += isinstance(member, ast.Lambda) and has_logic(member)
+        found += logic_lambdas(member) if isinstance(member, TABLES) else 0
+    return found
+
+
+def outermost_tables(tree: ast.Module) -> Iterator[tuple[ast.expr, Definition | None, str]]:
+    """Each table not inside another, with its enclosing class or function (None at module level)
+    and, at module level, the variable it is assigned to."""
+    todo: list[tuple[ast.AST, ast.AST | None, Definition | None, str]] = [(tree, None, None, "<module>")]
+    while todo:
+        node, parent, owner, label = todo.pop()
+        if isinstance(node, TABLES) and not isinstance(parent, TABLES):
+            yield node, owner, label
+        if isinstance(node, ast.ClassDef | Function):
+            owner = node
+        elif owner is None and isinstance(node, ast.stmt):
+            label = module_label(node, label)
+        todo += [(child, node, owner, label) for child in ast.iter_child_nodes(node)]
+
+
+def module_label(statement: ast.stmt, label: str) -> str:
+    """What a module-level table is known by: the variable it is assigned to, or the call it is passed to."""
+    if isinstance(statement, ast.Assign):
+        return ast.unparse(statement.targets[0])
+    if isinstance(statement, ast.AnnAssign | ast.AugAssign):
+        return ast.unparse(statement.target)
+    if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
+        return ast.unparse(statement.value.func) + "()"
+    return label
+
+
+def lambda_tables(tree: ast.Module, names: dict[ast.AST, str]) -> list[Finding]:
+    """SLP012: two or more lambdas with logic in one table, where the complexity checks can't see their branches.
+    The finding sits on the enclosing definition, or on the table itself at module level."""
+    return [
+        Finding(
+            "SLP012",
+            (owner or table).lineno,
+            f"{count} lambdas with logic in the table at line {table.lineno}",
+            scope,
+            "",
+        )
+        for table, owner, label in outermost_tables(tree)
+        if (count := logic_lambdas(table)) >= 2
+        for scope in [names[owner] if owner else label]
+    ]
+
+
 def file_findings(source: str, path: str) -> list[Finding]:
-    """Single-file rules for one file: SLP002 and SLP004."""
+    """Single-file rules for one file: SLP002, SLP004 and SLP012."""
     tree = None if is_test_file(Path(path)) or path.endswith(".pyi") else parse(source)
     if tree is None:
         return []
@@ -85,4 +154,5 @@ def file_findings(source: str, path: str) -> list[Finding]:
         for function, scope in defs
         if (message := pass_through(function, method="." in scope))
     ]
+    found += lambda_tables(tree, names)
     return placed(path, source, names, found)

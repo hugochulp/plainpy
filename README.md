@@ -81,9 +81,10 @@ and `.pyi` stubs are never judged, and only definitions that are new or changed 
 | SLP009 | basedpyright's `reportUnnecessaryIsInstance`, `reportUnnecessaryComparison` and `reportUnnecessaryContains`. Only reported when your basedpyright mode turns them on (its default and `strict` do; `standard` and `basic` don't). Being basedpyright's, it can't take a slopcheck allow comment | finish | warning (error in strict) |
 | SLP010 | A module with more than 15 public functions and classes (reported again only when the count goes up; `__init__.py` is exempt), or a file named `utils.py`, `helpers.py` or `common.py` | finish | warning |
 | SLP011 | More than 2 new exception classes in the session | finish | warning |
+| SLP012 | Two or more lambdas with logic in one dict, list, tuple or set, where the complexity checks can't see their branches. Lambdas that only read a name, attribute or item (`lambda row: row.name`) don't count | every edit | error |
 
 To keep one definition, put a reason on its `def` or `class` header (any line of it, so it
-survives the formatter wrapping a long header):
+survives the formatter wrapping a long header), or for a module-level SLP012 table on its first line:
 `# slopcheck: allow SLP004 -- old name kept for existing callers`. The reason follows the
 same rules as any other suppression.
 

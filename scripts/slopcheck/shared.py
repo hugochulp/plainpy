@@ -36,7 +36,7 @@ def comments_by_line(source: str) -> dict[int, str]:
 
 def placed(path: str, source: str, names: dict[ast.AST, str], found: list[Finding]) -> list[Finding]:
     """Fill in each finding's file, and drop the ones an allow comment on the header of its
-    definition (a class or function among the file's `qualnames`) covers. Findings carry no line
+    definition (a class or function among the file's `qualnames`), or on its own line, covers. Findings carry no line
     text: their scope names the definition, so editing its header doesn't make an old finding look new."""
     if not found:
         return []
@@ -44,7 +44,7 @@ def placed(path: str, source: str, names: dict[ast.AST, str], found: list[Findin
     comments = comments_by_line(source) if "slopcheck" in source.lower() else {}
     kept = []
     for finding in found:
-        header = range(finding.line, max(finding.line, body_starts[finding.line] - 1) + 1)
+        header = range(finding.line, max(finding.line, body_starts.get(finding.line, 0) - 1) + 1)
         allowed = [
             code
             for line in header

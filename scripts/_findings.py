@@ -18,8 +18,10 @@ MAX_ROWS_LISTED = 6
 SHORT_MESSAGE = 40
 
 COMPLEXITY_HINT = (
-    "flatten it: early returns, guard clauses, a dict lookup, or drop cases nobody "
-    "asked for. Do not move the logic into single-use helpers or new classes."
+    "make it simpler, not just shorter: early returns, guard clauses, a named function for a step that "
+    "does real work (one caller is fine). Keep every error case the input can trigger. Do not hide "
+    "branches in lambdas, flag arguments or packed one-line conditions. If the plain code is still over "
+    "the limit, keep it and add `# noqa: <rule> -- <why>` (complexipy: `# noqa: complexipy -- <why>`)."
 )
 HINTS = {
     "CPX001": COMPLEXITY_HINT,
@@ -28,7 +30,7 @@ HINTS = {
     "PLR0912": COMPLEXITY_HINT,
     "PLR0913": "remove parameters callers never vary. Do not bundle them into a config class.",
     "PLR0917": "remove parameters callers never vary, or make the rest keyword-only.",
-    "PLR0915": "remove what the task does not need before splitting anything.",
+    "PLR0915": "remove what the task does not need, then move a step with a name of its own into a function.",
     "F401": "delete imports nothing uses.",
     "SLP001": "use the one implementation directly; add an interface when a second implementation exists.",
     "SLP002": "turn the class into a function (or module-level functions). Do not add methods to pass the check.",
@@ -41,6 +43,7 @@ HINTS = {
     "SLP009": "delete the check: the types already guarantee it.",
     "SLP010": "move functions next to their callers and make helpers private. Do not rename the module to dodge this.",
     "SLP011": "raise built-in exceptions with a clear message; add a class only when a caller catches it.",
+    "SLP012": "write the cases out (an if/elif or match, or named functions) so the complexity checks see them.",
     "R0902": "a class holding this many attributes is doing too much; drop what the task does not need.",
     "R0901": "flatten the inheritance; prefer composition or plain functions.",
     "R0801": "keep one copy of the duplicated code, next to its callers.",
