@@ -90,7 +90,9 @@ def test_session_start_is_silent_outside_python_projects(tmp_path: Path, monkeyp
     assert result.stdout == ""
 
 
-def test_session_start_is_silent_when_the_project_folder_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_session_start_is_silent_when_the_project_folder_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     gone = tmp_path / "gone"
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(gone))

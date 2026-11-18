@@ -16,7 +16,7 @@ import shlex
 from itertools import takewhile
 from pathlib import Path
 
-from _common import CONFIG_FILES, pre_tool_decision, read_hook_input
+from _common import CONFIG_FILES, dependencies_allowed, pre_tool_decision, read_hook_input
 
 INSTALLERS = {
     ("uv", "add"), ("poetry", "add"), ("pdm", "add"), ("pip", "install"),
@@ -107,7 +107,7 @@ def main() -> None:
     tokens = shell_tokens(read_hook_input().get("tool_input", {}).get("command", ""))
     commands = split_commands(tokens)
     packages = [package for words in commands for package in installed_packages(words)]
-    if packages:
+    if packages and not dependencies_allowed():
         pre_tool_decision("ask", f"plainpy: Claude wants to add runtime dependencies: {', '.join(packages)}. Allow it?")
         return
     files = touched_config(tokens, commands)

@@ -25,6 +25,9 @@ silencing them, and a full check of the whole change when Claude finishes.
 - **Before every shell command:** `uv add`, `pip install`, `poetry add`, `pdm add`,
   `conda install` with new runtime packages, or a shell write to a config file, **asks you**
   first. Dev-only installs (`--dev`, `--group`) and `pip install -r` / `-e .` pass.
+- **Headless runs** (`claude -p`, CI, the Agent SDK) have nobody to answer these questions, so
+  Claude Code treats them as "no". Set `PLAINPY_ALLOW_DEPENDENCIES=1` in the environment to let
+  new dependencies through; lint and type-checker config changes are still refused.
 - **After every Write/Edit of a `.py` file:**
   1. applies safe Ruff fixes and formats the file;
   2. lints it with a broad Ruff rule set, checks cognitive complexity with complexipy, and

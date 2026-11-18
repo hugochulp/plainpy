@@ -22,7 +22,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from _common import CONFIG_FILES, PYTHON_SUFFIXES, pre_tool_decision, read_hook_input
+from _common import CONFIG_FILES, PYTHON_SUFFIXES, dependencies_allowed, pre_tool_decision, read_hook_input
 from slopcheck.shared import ALLOW_CODES, comments_by_line
 
 FILE_WIDE = re.compile(
@@ -118,10 +118,12 @@ def config_question(path: Path, before: str, after: str) -> str | None:
         return f"Claude wants to change {name}, which configures plainpy's checks. Allow it?"
     if name.startswith("requirements") and name.endswith((".txt", ".in")):
         added = requirement_names(after.splitlines()) - requirement_names(before.splitlines())
+        added = set() if dependencies_allowed() else added
         return f"Claude wants to add dependencies: {', '.join(sorted(added))}. Allow it?" if added else None
     if name != "pyproject.toml":
         return None
     sections, deps = pyproject_changes(before, after)
+    deps = set() if dependencies_allowed() else deps
     parts = [f"change [tool.{s}] config" for s in sections] + (
         [f"add dependencies: {', '.join(sorted(deps))}"] if deps else []
     )

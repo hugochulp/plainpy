@@ -63,6 +63,11 @@ def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload))
 
 
+def dependencies_allowed() -> bool:
+    """PLAINPY_ALLOW_DEPENDENCIES=1 lets new dependencies through: for headless runs, where nobody can answer."""
+    return os.environ.get("PLAINPY_ALLOW_DEPENDENCIES") == "1"
+
+
 def pre_tool_decision(decision: str, reason: str) -> None:
     """Answer a PreToolUse hook: "deny" goes back to Claude, "ask" prompts the user."""
     emit(

@@ -5,10 +5,13 @@ solution is scored by scb-check and every hidden test file so far. Rows go to <o
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -24,6 +27,9 @@ TOOLS = "Bash,Read,Edit,Write,Glob,Grep,Skill"  # coding tools only: no web, MCP
 SOLUTION_ONLY = shutil.ignore_patterns(
     ".venv", ".git", "__pycache__", "test", "tests", "test_*.py", "*_test.py", "conftest.py"
 )
+# Nobody can answer plainpy's dependency asks in -p; pip's keychain certificate check fails in the sandbox.
+ENV = {**os.environ, "PLAINPY_ALLOW_DEPENDENCIES": "1", "PIP_USE_DEPRECATED": "legacy-certs"}
+REFUSED = threading.Event()  # a session errored without spending anything (e.g. a usage limit): start no more
 GIT = ["git", "-c", "user.name=plainpy-eval", "-c", "user.email=eval@localhost"]
 
 # SlopCodeBench's just-solve prompt (configs/prompts/just-solve.jinja), word for word.
@@ -52,12 +58,15 @@ def claude(workspace: Path, prompt: str, arm: str, args: argparse.Namespace, log
     if arm == "with":
         command += ["--plugin-dir", str(args.plugin.resolve())]
     with log.open("w") as out, suppress(subprocess.TimeoutExpired):  # a timed-out session is killed and scored
-        subprocess.run(command, cwd=workspace, stdout=out, stderr=subprocess.STDOUT, timeout=3600, check=False)
+        subprocess.run(command, cwd=workspace, env=ENV, stdout=out, stderr=subprocess.STDOUT, timeout=3600, check=False)
     lines = [json.loads(line) for line in log.read_text().splitlines() if line.startswith("{")]
     result = next((line for line in reversed(lines) if line.get("type") == "result"), {})
     session = next((line["session_id"] for line in lines if "session_id" in line), None)
     for transcript in Path.home().glob(f".claude/projects/*/{session}.jsonl"):  # hook feedback is only kept here
         shutil.copy(transcript, log.with_suffix(".transcript.jsonl"))
+    if result.get("is_error") and not result.get("total_cost_usd"):
+        REFUSED.set()
+        print(f"stopping: {log.parent.name} {log.stem} was refused: {result.get('result')}", flush=True)
     keep = ("subtype", "is_error", "num_turns", "duration_ms", "total_cost_usd", "usage", "session_id")
     return {key: result.get(key) for key in keep}
 
@@ -109,9 +118,13 @@ def run_chain(problem: str, arm: str, run: int, args: argparse.Namespace) -> Non
     (workspace / ".git" / "info" / "exclude").write_text(".venv/\n__pycache__/\n.pytest_cache/\n")
     entry = re.search(r"^entry_file: *(\S+)", (PROBLEMS / problem / "config.yaml").read_text(), re.MULTILINE)[1]
     for n in range(1, args.checkpoints + 1):
+        if REFUSED.is_set():
+            return
         spec = (PROBLEMS / problem / f"checkpoint_{n}.md").read_text()
         prompt = PROMPT.format(env=FIRST if n == 1 else LATER, spec=spec.strip())
         session = claude(workspace, prompt, arm, args, root / f"checkpoint_{n}.jsonl")
+        if REFUSED.is_set():  # no row: the chain is incomplete and needs a rerun
+            return
         for step in (["add", "-A"], ["commit", "-q", "--allow-empty", "-m", f"checkpoint {n}"], ["tag", f"cp{n}"]):
             subprocess.run([*GIT, *step], cwd=workspace, check=True)
         row = {"problem": problem, "arm": arm, "run": run, "checkpoint": n, "session": session}
@@ -147,6 +160,7 @@ def main() -> None:
     with ThreadPoolExecutor(args.jobs) as pool:
         list(pool.map(lambda chain: run_chain(*chain, args), chains))  # list() re-raises a chain's error
     print(f"results: {args.out}")
+    sys.exit(1 if REFUSED.is_set() else 0)
 
 
 if __name__ == "__main__":
