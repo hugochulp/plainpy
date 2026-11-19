@@ -27,6 +27,10 @@ CLI arguments, third-party API responses. After that, pass plain values or datac
 Do not create a model for data that never crosses a boundary, and do not re-validate data
 that a model or type already guarantees.
 
+Input from outside can be malformed in ways the task doesn't list (truncated, the wrong type,
+out of range). Where it enters, turn such failures into the program's own error format rather
+than a traceback.
+
 ## Avoid speculative generality
 
 - No ABC or Protocol with a single implementation.
@@ -41,7 +45,7 @@ The hook prints the file, line, rule and limit. Fix the cause:
 
 | Failure | Do | Do not |
 |---|---|---|
-| Cognitive complexity (CPX001), C901, too many branches or returns | Early returns and guard clauses; merge duplicate branches; turn an `if/elif` chain that only picks a value into a dict of values; move a step that does real work into a named function, even with one caller. If the plain code is still over the limit, keep it: `# noqa: C901 -- why the logic needs these branches` | Drop error handling the input can trigger; hide branches in lambdas or dispatch tables; add flag arguments; pack conditions into one line; add a strategy class |
+| Cognitive complexity (CPX001), C901 | Early returns and guard clauses; merge duplicate branches; turn an `if/elif` chain that only picks a value into a dict of values; move a step that does real work into a named function, even with one caller, where you can describe it without saying "part of". If the plain code is still over the limit, keep it whole, with the comment on its `def` line: `# noqa: C901 -- why the logic needs these branches` (CPX001: `# noqa: complexipy -- why`) | Cut a function at an arbitrary point into fragments; drop error handling the input can trigger; hide branches in lambdas or dispatch tables; add flag arguments; pack conditions into one line; add a strategy class |
 | Too many arguments (PLR0913/PLR0917) | Remove parameters callers never vary; make the rest keyword-only | Bundle them into a new config class |
 | Too many statements (PLR0915) | Remove what the task does not need, then move a step that has a name of its own into a function | Chop the function into numbered steps |
 | Type error (basedpyright) | Fix the types at their source | Add `Any`, `cast()` or `# type: ignore` |

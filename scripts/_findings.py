@@ -19,15 +19,15 @@ SHORT_MESSAGE = 40
 
 COMPLEXITY_HINT = (
     "make it simpler, not just shorter: early returns, guard clauses, a named function for a step that "
-    "does real work (one caller is fine). Keep every error case the input can trigger. Do not hide "
-    "branches in lambdas, flag arguments or packed one-line conditions. If the plain code is still over "
-    "the limit, keep it and add `# noqa: <rule> -- <why>` (complexipy: `# noqa: complexipy -- <why>`)."
+    "does real work (one caller is fine), split only where you can describe the step without saying "
+    '"part of". Keep every error case the input can trigger. Do not cut the function at an arbitrary '
+    "point, hide branches in lambdas, add flag arguments or pack conditions into one line. If the plain "
+    "code is still over the limit, keep it whole and put `# noqa: C901 -- <why>` (CPX001: "
+    "`# noqa: complexipy -- <why>`) on its `def` line."
 )
 HINTS = {
     "CPX001": COMPLEXITY_HINT,
     "C901": COMPLEXITY_HINT,
-    "PLR0911": COMPLEXITY_HINT,
-    "PLR0912": COMPLEXITY_HINT,
     "PLR0913": "remove parameters callers never vary. Do not bundle them into a config class.",
     "PLR0917": "remove parameters callers never vary, or make the rest keyword-only.",
     "PLR0915": "remove what the task does not need, then move a step with a name of its own into a function.",

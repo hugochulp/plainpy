@@ -18,8 +18,9 @@ from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 
+from problems import PROBLEMS, checkpoint_spec, entry_file, last_checkpoint, test_packages
+
 HERE = Path(__file__).resolve().parent
-PROBLEMS = HERE / ".cache" / "scb-problems"  # gabeorlanski/scb-problems @ 9cd9ca3, solutions left out
 PLUGIN = HERE / ".cache" / "plainpy-v0.4.1"  # `git worktree add --detach evals/.cache/plainpy-v0.4.1 v0.4.1`
 SCB_CHECK = "scb-check@0.2.0"
 TOOLS = "Bash,Read,Edit,Write,Glob,Grep,Skill"  # coding tools only: no web, MCP servers or app tools
@@ -74,7 +75,9 @@ def claude(workspace: Path, prompt: str, arm: str, args: argparse.Namespace, log
 def pytest(problem: str, n: int, *args: str) -> str:
     """pytest's output for a checkpoint's hidden test file; empty if the submission hangs."""
     tests = PROBLEMS / problem / "tests"
-    command = ["uv", "run", "--no-project", "--python", "3.12", "--with", "pytest", "python", "-m", "pytest", "-q"]
+    command = ["uv", "run", "--no-project", "--python", "3.12"]
+    command += [arg for package in test_packages(problem) for arg in ("--with", package)]
+    command += ["python", "-m", "pytest", "-q"]
     command += [str(tests / f"test_checkpoint_{n}.py"), f"--checkpoint=checkpoint_{n}", "--tb=no", *args]
     with suppress(subprocess.TimeoutExpired):  # a hung submission passes nothing
         return subprocess.run(command, cwd=tests, capture_output=True, text=True, timeout=1800, check=False).stdout
@@ -84,8 +87,10 @@ def pytest(problem: str, n: int, *args: str) -> str:
 @cache
 def test_count(problem: str, n: int) -> int:
     """Tests in a checkpoint's file, so one that fails to load or times out still counts in full."""
-    found = re.search(r"(\d+) tests? collected", pytest(problem, n, "--entrypoint=none", "--collect-only"))
-    return int(found[1]) if found else 0
+    output = pytest(problem, n, "--entrypoint=none", "--collect-only")
+    if not (found := re.search(r"(\d+) tests? collected", output)):
+        raise RuntimeError(f"{problem} checkpoint {n}: hidden tests don't load:\n{output[-1500:]}")
+    return int(found[1])
 
 
 def hidden_tests(copy: Path, python: str, problem: str, entry: str, checkpoint: int) -> dict[str, list[int]]:
@@ -116,12 +121,12 @@ def run_chain(problem: str, arm: str, run: int, args: argparse.Namespace) -> Non
     for step in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "start"]):
         subprocess.run([*GIT, *step], cwd=workspace, check=True)
     (workspace / ".git" / "info" / "exclude").write_text(".venv/\n__pycache__/\n.pytest_cache/\n")
-    entry = re.search(r"^entry_file: *(\S+)", (PROBLEMS / problem / "config.yaml").read_text(), re.MULTILINE)[1]
-    for n in range(1, args.checkpoints + 1):
+    entry = entry_file(problem)
+    last = last_checkpoint(problem)
+    for n in range(1, last + 1 if args.checkpoints is None else min(last, args.checkpoints) + 1):
         if REFUSED.is_set():
             return
-        spec = (PROBLEMS / problem / f"checkpoint_{n}.md").read_text()
-        prompt = PROMPT.format(env=FIRST if n == 1 else LATER, spec=spec.strip())
+        prompt = PROMPT.format(env=FIRST if n == 1 else LATER, spec=checkpoint_spec(problem, n))
         session = claude(workspace, prompt, arm, args, root / f"checkpoint_{n}.jsonl")
         if REFUSED.is_set():  # no row: the chain is incomplete and needs a rerun
             return
@@ -145,7 +150,7 @@ def main() -> None:
     parser.add_argument("--problems", nargs="+", default=["etl_pipeline", "code_search"])
     parser.add_argument("--arms", nargs="+", default=["without", "with"], choices=["without", "with"])
     parser.add_argument("--runs", type=int, default=3)
-    parser.add_argument("--checkpoints", type=int, default=5)
+    parser.add_argument("--checkpoints", type=int, help="stop after this many (default: all)")
     parser.add_argument("--model", default="claude-opus-5-5")
     parser.add_argument("--effort", default="medium")
     parser.add_argument("--jobs", type=int, default=2)
@@ -154,6 +159,9 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=Path.home() / ".cache" / "plainpy-evals" / stamp)
     args = parser.parse_args()
     chains = [(p, a, r) for p in args.problems for r in range(1, args.runs + 1) for a in args.arms]
+    for problem in args.problems:  # fail before any session if a hidden test file doesn't load
+        for n in range(1, last_checkpoint(problem) + 1):
+            test_count(problem, n)
     args.roots = [f"{p}-{a}-{r}" for p, a, r in chains]
     for name in args.roots:  # all up front, so every session's sandbox can deny reads of the others
         (args.out / name).mkdir(parents=True)

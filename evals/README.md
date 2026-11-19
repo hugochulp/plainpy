@@ -33,7 +33,7 @@ python3 evals/run.py --problems etl_pipeline --checkpoints 2 --runs 1
 python3 evals/measure.py ~/.cache/plainpy-evals/<timestamp>
 ```
 
-Defaults: both problems, 5 checkpoints, 3 runs per arm, Opus 5.5 at medium effort, 2 runs at a time.
+Defaults: etl_pipeline and code_search, every checkpoint, 3 runs per arm, Opus 5.5 at medium effort, 2 runs at a time.
 `--plugin <dir>` tests another plainpy checkout in the with arm (default: the v0.4.1 worktree); copy
 uncommitted work somewhere first, so edits made while it runs don't change what's tested.
 Runs use your own Claude login and count against its usage.

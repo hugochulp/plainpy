@@ -52,10 +52,11 @@ def pairs() -> None:
                 agreed = one if one == two else "tie"
                 wins[problem(w), dim] += 1 if agreed == "with" else 0.5 if agreed == "tie" else 0
                 wins[problem(w), dim, "n"] += 1
+    problems = sorted({p for p, *_ in wins})
     print("\nPairwise: plainpy's score out of the pairs judged (win 1, tie or split 0.5)")
-    print("| dimension | " + " | ".join(sorted({p for p, *_ in wins})) + " |\n|---|---|---|")
+    print("| dimension | " + " | ".join(problems) + " |\n" + "|---" * (len(problems) + 1) + "|")
     for dim, label in NAMES.items():
-        cells = [f"{wins[p, dim]:g} / {wins[p, dim, 'n']:g}" for p in sorted({p for p, *_ in wins})]
+        cells = [f"{wins[p, dim]:g} / {wins[p, dim, 'n']:g}" for p in problems]
         print(f"| {dim} {label} | " + " | ".join(cells) + " |")
     print(
         f"\nOrder effect: {flips} of {judged} judgments ({flips / max(judged, 1):.0%}) change winner when A and B swap"

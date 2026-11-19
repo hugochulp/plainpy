@@ -33,11 +33,15 @@ plainpy is active ({profile} profile). Python you write here is checked after ev
 - Use Pydantic only at I/O boundaries (HTTP, files, env, CLI). Inside, use functions, then dataclasses.
 - No speculative generality: no unused parameters, flags, ABCs or extension points nobody asked for.
 - Keep the diff small. Use the stdlib before adding a dependency.
+- Input from outside (files, CLI arguments, network) can be malformed in ways the task doesn't list:
+  fail with the program's own error format, not a traceback.
 - When a check fails, make the code simpler, not just shorter: early returns, guard clauses, a named
-  function for a step that does real work (one caller is fine). A dict holds values, never lambdas.
-  Never pass a check by dropping error handling, hiding branches in lambdas, adding flag arguments,
-  packing conditions into one line, or wrapping code in new classes. If the plain code is still over
-  a complexity limit, keep it and add `# noqa: <rule> -- <why>`; for other rules, never noqa/type: ignore.
+  function for a step that does real work (one caller is fine). Split only at a seam: a step you can
+  describe without saying "part of". A dict holds values, never lambdas.
+  Never pass a check by cutting a function at an arbitrary point, dropping error handling, hiding
+  branches in lambdas, adding flag arguments, packing conditions into one line, or adding classes.
+  If the plain code is still over a complexity limit, keep it whole and put `# noqa: C901 -- <why>`
+  or `# noqa: complexipy -- <why>` on its `def` line; for other rules, never noqa/type: ignore.
 - A suppression comment is refused unless it names the rule and gives a reason after ` -- `.
   Lint config changes and new runtime dependencies need the user's approval.
 - When you finish, the whole change is checked: types, tests, dead code, class design,

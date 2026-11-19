@@ -155,9 +155,11 @@ class_budget = 4       # new classes per session before SLP006 blocks
 | New classes per session (SLP006) | 6 | 3 | 2 |
 | Type warnings block (not just errors) | no | no | yes |
 
-Ruff also enforces at most 5 arguments, 10 branches, 6 returns and 40 statements per
-function. The plugin adds its rules on top of your own `[tool.ruff]` config with
-`--extend-select`, so your excludes and per-file ignores still apply.
+Ruff also enforces at most 5 arguments and 40 statements per function. Returns and branches
+aren't limited on their own (PLR0911, PLR0912): the two complexity limits already count them,
+and a third limit on the same thing pushed Claude to cut functions into fragments. The plugin
+adds its rules on top of your own `[tool.ruff]` config with `--extend-select`, so your
+excludes and per-file ignores still apply.
 
 ## Develop
 

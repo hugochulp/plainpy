@@ -1,16 +1,17 @@
 # Blind code review: rubric and prompts (draft)
 
 Does plainpy's code hold up under a careful human-style review, beyond the numbers it is built to improve?
-Each final solution (checkpoint 5) is reviewed alone, then compared in pairs, without the reviewer
+Each final solution (its problem's last checkpoint) is reviewed alone, then compared in pairs, without the reviewer
 knowing which run, arm or tool produced it.
 
 ## Material
 
-- `~/.cache/plainpy-evals/review/solutions/S01`–`S12`: the checkpoint 5 code of every run, code and
+- `~/.cache/plainpy-evals/review/solutions/S01`–`S12`: the last checkpoint's code of every run, code and
   `requirements.txt` only (no tests, venv, git history, transcripts). Names are shuffled (seed 20261118).
   Every copy gets the same Ruff import sort and format, since plainpy formats every file it touches and
-  that alone would give its arm away. `PROBLEM` names the problem.
-- `~/.cache/plainpy-evals/review/specs/<problem>/checkpoint_1.md`–`checkpoint_5.md`: the full spec the
+  that alone would give its arm away, and suppression comments (`# noqa`, `# type: ignore`, `# slopcheck: allow`)
+  are stripped, since only plainpy asks for them. `PROBLEM` names the problem.
+- `~/.cache/plainpy-evals/review/specs/<problem>/checkpoint_1.md` onwards: the full spec the
   code was written against, in the order it arrived.
 - The key (`S01` → run) is kept outside the review folder, and reviewers are denied reads of it.
 
@@ -91,6 +92,32 @@ problem is flagged as a problem in its own right.
 
 Single reviews give the evidence behind the verdict: high and medium findings per 1,000 non-blank lines,
 per dimension and arm, and their mean scores.
+
+## Problem sets (fixed 2026-11-18, before round two ran)
+
+The first two rounds tuned plainpy on `etl_pipeline` and `code_search` and judged it on the same two, so
+their results can't show whether a change generalises. From here on:
+
+| Set | Easy | Medium | Hard | Use |
+|---|---|---|---|---|
+| Development | `etl_pipeline`, `code_search` | `log_query`, `mvvault` | — | tuning; at most one more round after round two |
+| Held-out | — | `layered_config_synthesizer`, `eve_jump_planner` | `meshctl`, `eve_industry` | run once, on the frozen plugin |
+
+The new problems were drawn with `random.Random(20261120)` (4 Medium, then 2 Hard, with `sample`) from
+SlopCodeBench's problems outside its web and networking categories, which the sandboxed harness may not be
+able to serve. An earlier draw (seed 20261119, 2 Easy and 2 Medium held-out) was replaced before anything
+ran, when the sets became 4 problems each. Nobody reads a held-out spec before the held-out run. Every change
+made during development must follow a general principle, never a fix for one problem's bug.
+
+**Contortion is judged by the single reviews.** The arm without plainpy has no limits, so it never shows
+contortion and wins every pair on that dimension whenever plainpy shows any split; long functions count
+against readability instead. Pairwise contortion is still reported.
+
+**Held-out bar.** plainpy is materially better if, on at least 3 of the 4 held-out problems, it wins at
+least 7 of 9 pairs overall (7) and its mean single-review contortion score (6) is at least 4 of 5; and it
+loses a majority of pairs on correctness (1) or error handling (2) on at most one problem; and the hidden
+tests passed don't drop. Materially worse is the same with the arms swapped; anything else is no material
+difference.
 
 ## Checking the reviewers
 

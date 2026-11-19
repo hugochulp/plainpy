@@ -58,12 +58,12 @@ RUFF_RULES = (
 RUFF_LIMITS = (
     "lint.pylint.max-args=5",
     "lint.pylint.max-positional-args=5",
-    "lint.pylint.max-branches=10",
-    "lint.pylint.max-returns=6",
     "lint.pylint.max-statements=40",
 )
-# TRY003 pushes toward one exception class per message; PLR2004 toward constant sprawl.
-IGNORED = ("TRY003", "PLR2004")
+# TRY003 pushes toward one exception class per message; PLR2004 toward constant sprawl. Too many
+# returns or branches (PLR0911, PLR0912) is what C901 and complexipy already measure: a third limit on
+# the same thing pushed Claude to cut functions into fragments.
+IGNORED = ("TRY003", "PLR2004", "PLR0911", "PLR0912")
 # An import is often added one edit before its use, so F401 waits for the finish check.
 IGNORED_PER_EDIT = ("F401",)
 IGNORED_IN_TESTS = ("S101", "S105", "S106", "ANN", "ARG", "PLR2004")
