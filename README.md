@@ -156,10 +156,11 @@ class_budget = 4       # new classes per session before SLP006 blocks
 | Type warnings block (not just errors) | no | no | yes |
 
 Ruff also enforces at most 5 arguments and 40 statements per function. Returns and branches
-aren't limited on their own (PLR0911, PLR0912): the two complexity limits already count them,
-and a third limit on the same thing pushed Claude to cut functions into fragments. The plugin
-adds its rules on top of your own `[tool.ruff]` config with `--extend-select`, so your
-excludes and per-file ignores still apply.
+aren't limited on their own (PLR0911, PLR0912): the two complexity limits already count them.
+Those two, TRY003 and PLR2004 aren't run unless your own Ruff config selects them, so a `noqa` for
+them is flagged as unused (RUF100), as is one for a rule Ruff runs but finds nothing for. Rules
+plainpy only skips in tests or `__init__.py` still run there. The plugin adds its rules on top of your own
+`[tool.ruff]` config with `--extend-select`, so your excludes and per-file ignores still apply.
 
 ## Develop
 

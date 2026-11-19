@@ -166,6 +166,26 @@ def test_autofix_sorts_imports_but_keeps_unused_ones(repo: Path) -> None:
     assert "F401" not in result.stderr
 
 
+def test_a_suppression_for_nothing_reported_is_kept_and_reported(repo: Path) -> None:
+    start_session(repo)
+    module = repo / "mod.py"
+    module.write_text("def v1(x: int) -> bool:\n    return x == 2  # noqa: PLR2004 -- schema version\n")
+    result = edit(module)
+    assert result.returncode == 2
+    assert "RUF100" in result.stderr
+    assert "# noqa: PLR2004" in module.read_text()
+
+
+def test_a_suppression_the_projects_own_ruff_needs_is_left_alone(repo: Path) -> None:
+    (repo / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "0"\n\n[tool.ruff.lint]\nselect = ["PL"]\n')
+    start_session(repo)
+    module = repo / "mod.py"
+    module.write_text("def v1(x: int) -> bool:\n    return x == 2  # noqa: PLR2004 -- schema version\n")
+    result = edit(module)
+    assert result.returncode == 0, result.stderr
+    assert "# noqa: PLR2004" in module.read_text()
+
+
 def test_assert_is_allowed_in_tests(repo: Path) -> None:
     start_session(repo)
     test_file = repo / "tests" / "test_app.py"

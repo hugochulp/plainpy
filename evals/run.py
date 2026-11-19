@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 
-from problems import PROBLEMS, checkpoint_spec, entry_file, last_checkpoint, test_packages
+from problems import PROBLEMS, checkpoint_spec, entry_file, last_checkpoint, static_assets, test_packages, tests_folder
 
 HERE = Path(__file__).resolve().parent
 PLUGIN = HERE / ".cache" / "plainpy-v0.4.1"  # `git worktree add --detach evals/.cache/plainpy-v0.4.1 v0.4.1`
@@ -74,7 +74,7 @@ def claude(workspace: Path, prompt: str, arm: str, args: argparse.Namespace, log
 
 def pytest(problem: str, n: int, *args: str) -> str:
     """pytest's output for a checkpoint's hidden test file; empty if the submission hangs."""
-    tests = PROBLEMS / problem / "tests"
+    tests = tests_folder(problem)
     command = ["uv", "run", "--no-project", "--python", "3.12"]
     command += [arg for package in test_packages(problem) for arg in ("--with", package)]
     command += ["python", "-m", "pytest", "-q"]
@@ -120,7 +120,11 @@ def run_chain(problem: str, arm: str, run: int, args: argparse.Namespace) -> Non
     workspace.mkdir(parents=True)
     for step in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "start"]):
         subprocess.run([*GIT, *step], cwd=workspace, check=True)
-    (workspace / ".git" / "info" / "exclude").write_text(".venv/\n__pycache__/\n.pytest_cache/\n")
+    assets = static_assets(problem).values()  # data the spec reads: a copy, as the sandbox can't read PROBLEMS
+    for path in assets:
+        shutil.copytree(PROBLEMS / problem / path, workspace / path)
+    ignored = [".venv/", "__pycache__/", ".pytest_cache/", *(f"/{path}/" for path in assets)]  # never reviewed
+    (workspace / ".git" / "info" / "exclude").write_text("".join(f"{name}\n" for name in ignored))
     entry = entry_file(problem)
     last = last_checkpoint(problem)
     for n in range(1, last + 1 if args.checkpoints is None else min(last, args.checkpoints) + 1):

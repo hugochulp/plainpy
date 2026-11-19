@@ -119,6 +119,32 @@ loses a majority of pairs on correctness (1) or error handling (2) on at most on
 tests passed don't drop. Materially worse is the same with the arms swapped; anything else is no material
 difference.
 
+## Round three (fixed 2026-11-19, before it ran): the last development round
+
+**Models.** From round three on, Claude Sonnet 5.5 (`claude-sonnet-5-5`, medium effort) writes the code and
+Claude Opus 5.5 (high effort) reviews it, so the reviewer is the stronger model and never grades its own
+output. Rounds one and two coded with Opus and can't be compared with round three directly.
+
+**Changes, each a general principle:** rules plainpy doesn't enforce are no longer run, and a `noqa` that
+suppresses nothing a check reported is flagged (RUF100) instead of silently kept; the doctrine says small
+means less structure, not less behaviour, and that only reported findings may be suppressed; the detailed
+complexity advice appears only in the hint shown when C901 or CPX001 fires. Frozen copy:
+`evals/.cache/plainpy-round3`.
+
+**Runs.** Both arms, 3 runs, all 4 development problems, coded with Sonnet; blind-reviewed as before.
+Transfer check, reported but not part of any bar: the round-three plugin coded with Opus, 1 run per
+problem, against round two's Opus runs without plainpy. Hidden tests run with SlopCodeBench's standard test
+packages plus each problem's `test_dependencies`; round two's tests were rescored the same way.
+
+**Freeze rule.** Round three is the last tuning round. Its plugin is frozen for the held-out round whatever
+the result, and the development bar (the held-out bar, applied to these 4 problems) is reported alongside.
+The held-out round codes with Sonnet and reviews with Opus, as here.
+
+**Harness fix before the held-out run (2026-11-19, plugin untouched).** Two held-out problems ship data
+(`static_assets` in config.yaml: the EVE `sde` folder). run.py didn't pass it on, so it now copies it as
+SlopCodeBench does: into each workspace for the session (kept out of git, so never reviewed), and to the
+hidden tests' `tests/assets/<name>`. Found by reading the held-out configs and test fixtures, not specs.
+
 ## Checking the reviewers
 
 - **Against the tests:** the hidden tests each solution fails are rerun and listed. A reviewer whose

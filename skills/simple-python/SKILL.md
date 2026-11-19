@@ -5,7 +5,8 @@ description: How to write and refactor Python in a plainpy project - when a clas
 
 # Simple Python
 
-Write the least code that solves the task, in the flattest shape that stays readable.
+Write the least structure that solves the whole task, in the flattest shape that stays readable.
+Small means fewer layers, not fewer features: implement everything the task asks, edge cases included.
 plainpy's checks enforce limits on size and complexity, but they cannot see over-abstraction,
 so this guide covers what the tools miss.
 
@@ -65,7 +66,7 @@ The hook prints the file, line, rule and limit. Fix the cause:
 | Schema with several models over the class budget (SLP006) | If every model is part of the schema, tell the user, or allow it: `# slopcheck: allow SLP006 -- part of the API schema` | Flatten the schema into dicts |
 | Duplicated code (R0801) | Keep one copy, next to its callers | Move it into a new `utils.py` |
 | Failing test | Fix the code, or the test if the test is wrong and the user agrees | Delete, skip or weaken the test |
-| Any other rule | Change the code | Add `# noqa`, `# type: ignore`, or edit lint config |
+| Any other rule | Change the code; if it is right as it is, suppress that one reported finding with a reason | Suppress a rule nothing reported (RUF100 flags it), or edit lint config |
 
 Only code you changed is judged. Do not "fix" unrelated existing code unless asked.
 
