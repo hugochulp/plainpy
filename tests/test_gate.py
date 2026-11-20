@@ -388,10 +388,16 @@ def test_a_base_that_cannot_be_checked_never_blocks(monkeypatch: pytest.MonkeyPa
     assert "vulture timed out" in section.notes[0]
 
 
-def test_a_fresh_git_init_is_checked_from_its_first_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("data", [False, True])
+def test_a_fresh_git_init_is_checked_from_its_first_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, data: bool
+) -> None:
     project = tmp_path / "fresh"
     project.mkdir()
     git(project, "init", "-q", "-b", "main")  # an empty folder, no commit yet: the base is git's empty tree
+    if data:  # a folder of data the task reads doesn't stop it counting as new
+        (project / "data").mkdir()
+        (project / "data" / "rows.csv.bz2").write_bytes(b"BZh9")
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
     start(project)

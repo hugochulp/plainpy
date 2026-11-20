@@ -158,3 +158,37 @@ hidden tests' `tests/assets/<name>`. Found by reading the held-out configs and t
 - **One reviewer per solution:** a single review is one sample. If two reviews of the same solution
   would disagree a lot, the findings counts are only a rough guide; the pairwise verdict, judged twice,
   is the sturdier result.
+
+## Held-out correction (fixed 2026-11-19, after the held-out verdict, before the rerun)
+
+**Defect.** A Copilot review found that plainpy never started at checkpoint 1 of the six EVE runs with plainpy: the
+workspace held only the copied `sde/` data folder, and `session_start` counted a folder as a new project only when
+it held nothing but dotfiles and docs. No doctrine, no base snapshot, no finish check; checkpoints 2 onwards ran as
+intended. The other two held-out problems weren't affected.
+
+**Fix, a general principle:** folders at the top level no longer stop a folder counting as a new project, since
+another language's project has its own files there (a manifest or source). Frozen copy:
+`evals/.cache/plainpy-round3-dirfix`, which differs from `plainpy-round3` in that one function.
+
+**Rerun.** Only the arm with plainpy, on `eve_industry` and `eve_jump_planner`: 3 runs each, Sonnet, as before.
+Blind-reviewed against the same runs without plainpy, under the held-out bar. The registered verdict stands; the
+corrected one is reported beside it, labelled as a harness-defect correction, with layered_config and meshctl
+taken from the registered round.
+
+**Corrected result (review-6, 2026-11-19).** Still **no material difference**: the contortion clause is met on 2 of 4
+problems, as in the registered round.
+
+| | eve_industry (registered → corrected) | eve_jump_planner (registered → corrected) |
+|---|---|---|
+| Overall, pairs won | 9 → 9 | 8.5 → 9 |
+| Contortion, mean single score with plainpy (without: 5.0) | 3.7 → 3.3 | 4.0 → 4.7 |
+| Correctness, win-tie-loss | 8-1-0 → 6-0-3 | 3-1-5 → 1-2-6 |
+| Error handling, win-tie-loss | 9-0-0 → 9-0-0 | 0-2-7 → 9-0-0 |
+| Hidden tests so far, last checkpoint, median of runs (without) | 0.88 → 0.88 (0.79) | 0.32 → 0.29 (0.32) |
+
+Correctness is lost by a majority on eve_jump_planner only, so that clause still holds; its hidden tests are 29 of 93
+with plainpy against 30 of 93 without, over the three runs. Order effect 7%. The rerun's hidden tests were first
+scored with `VIRTUAL_ENV` set by the `uv run` that launched run.py, so `uv pip install` put one run's PyYAML outside
+its test venv; they were rescored from each checkpoint's tag (the sessions, which install with `.venv/bin/pip`, and
+the registered round, launched with `python3`, weren't affected). The review prompts say the spec came in five
+parts whatever the count; eve_jump_planner has three, which three reviewers remarked on, in both rounds alike.

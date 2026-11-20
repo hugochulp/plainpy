@@ -50,9 +50,11 @@ def known_test_failures(project: Path) -> list[str]:
 
 
 def new_project(project: Path) -> bool:
-    """Nothing but dotfiles and docs yet, as in a fresh `git init`: what Claude writes here may well be Python."""
+    """Nothing but dotfiles, docs and folders (of data, say) yet, as in a fresh `git init`: what Claude writes here
+    may well be Python. Another language's project has its own files at the top: a manifest or source."""
     try:
-        return all(entry.name.startswith(".") or entry.name.endswith(DOC_SUFFIXES) for entry in project.iterdir())
+        files = [entry.name for entry in project.iterdir() if not entry.is_dir()]
+        return all(name.startswith(".") or name.endswith(DOC_SUFFIXES) for name in files)
     except OSError:  # missing or unreadable: nothing to snapshot
         return False
 
