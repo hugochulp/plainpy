@@ -3,7 +3,7 @@
 A Claude Code plugin that keeps the Python Claude writes small and flat.
 It does this with deterministic checks run as hooks, not with longer instructions.
 
-**Status: v0.4.1.** Per-edit lint, complexity and anti-abstraction checks, guards against
+**Status: v0.5.0.** Per-edit lint, complexity and anti-abstraction checks, guards against
 silencing them, and a full check of the whole change when Claude finishes.
 
 ## What it does
@@ -169,7 +169,7 @@ uvx --python 3.13 --with pytest pytest -q
 ```
 
 ```bash
-uvx ruff@0.17.5 check scripts tests && uvx ruff@0.17.5 format --check scripts tests
+uvx ruff@0.17.5 check scripts tests evals && uvx ruff@0.17.5 format --check scripts tests evals
 ```
 
 ## License

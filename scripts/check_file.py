@@ -115,9 +115,11 @@ def ruff_config(path: Path) -> dict[str, Any] | None:
     """A Ruff config file's settings; None if it has none (a pyproject.toml without [tool.ruff]) or can't be read."""
     try:
         config = tomllib.loads(path.read_text())
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, ValueError):  # unreadable, not UTF-8 or not TOML
         return None
-    return config.get("tool", {}).get("ruff") if path.name == "pyproject.toml" else config
+    for key in ("tool", "ruff") if path.name == "pyproject.toml" else ():
+        config = config.get(key) if isinstance(config, dict) else None
+    return config if isinstance(config, dict) else None
 
 
 @cache
@@ -131,8 +133,9 @@ def own_selected(folder: Path) -> tuple[str, ...]:
     chosen, seen = [], set()
     while path and path not in seen and (config := ruff_config(path)) is not None:
         seen.add(path)
-        lint = config.get("lint", {})
-        chosen += [str(s) for key in ("select", "extend-select") for s in [*config.get(key, []), *lint.get(key, [])]]
+        lint = given if isinstance(given := config.get("lint"), dict) else {}
+        lists = [table.get(key) for table in (config, lint) for key in ("select", "extend-select")]
+        chosen += [str(s) for found in lists if isinstance(found, list) for s in found]
         base = Path(os.path.expandvars(str(config["extend"]))).expanduser() if "extend" in config else None
         path = (path.parent / base).resolve() if base else None  # an absolute base replaces path.parent
     return tuple(code for code in IGNORED if any(s == "ALL" or code.startswith(s) for s in chosen))

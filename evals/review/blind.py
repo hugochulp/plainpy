@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))  # plai
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _findings import is_test_file
 from guard_edit import LINE_LEVEL
+from measure import git
 from problems import checkpoint_spec, last_checkpoint
 
 EVALS = Path.home() / ".cache" / "plainpy-evals"
@@ -37,13 +38,11 @@ def strip_suppressions(source: str) -> str:
 
 
 def copy_solution(workspace: Path, dest: Path, tag: str) -> None:
-    listing = ["git", "-C", str(workspace), "ls-tree", "-r", "--name-only", tag]
-    for name in subprocess.run(listing, capture_output=True, text=True, check=True).stdout.split():
+    for name in git(workspace, "ls-tree", "-r", "--name-only", tag).split():
         if (name.endswith(".py") or name == "requirements.txt") and not is_test_file(Path(name)):
             target = dest / name
             target.parent.mkdir(parents=True, exist_ok=True)
-            show = ["git", "-C", str(workspace), "show", f"{tag}:{name}"]
-            text = subprocess.run(show, capture_output=True, text=True, check=True).stdout
+            text = git(workspace, "show", f"{tag}:{name}")
             target.write_text(strip_suppressions(text) if name.endswith(".py") else text)
 
 

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -86,9 +87,10 @@ def project_dir(hook_input: dict[str, Any]) -> Path:
     return Path(env_dir or hook_input.get("cwd") or Path.cwd()).resolve()
 
 
-def is_python_project(project: Path) -> bool:
+def is_python_project(project: Path, changed: Iterable[str] = ()) -> bool:
+    """A Python marker or module at the top or under src/, or Python among the `changed` files (a new project)."""
     markers = ("pyproject.toml", "setup.py", "setup.cfg")
-    if any((project / name).exists() for name in markers):
+    if any((project / name).exists() for name in markers) or any(name.endswith(PYTHON_SUFFIXES) for name in changed):
         return True
     return any(project.glob("*.py")) or any(project.glob("src/**/*.py"))
 

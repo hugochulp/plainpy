@@ -69,8 +69,7 @@ def pass_through(function: Function, *, method: bool) -> str | None:
     return f"`{function.name}` only passes its arguments on to `{callee}`: call `{callee}` directly"
 
 
-SEQUENCES = ast.List | ast.Tuple | ast.Set
-TABLES = ast.Dict | SEQUENCES
+TABLES = ast.Dict | ast.List | ast.Tuple | ast.Set
 Definition = ast.ClassDef | Function
 LOGIC = ast.IfExp | ast.BoolOp | ast.Compare | ast.BinOp | ast.UnaryOp  # what a lambda's branches are made of
 
@@ -87,9 +86,9 @@ def has_logic(function: ast.Lambda) -> bool:
     return any(map(is_logic, ast.walk(function.body)))
 
 
-def logic_lambdas(table: ast.expr) -> int:
+def logic_lambdas(table: TABLES) -> int:
     """Lambdas with logic in a table, counted through nested tables (a list of `(name, lambda)` pairs)."""
-    members = table.values if isinstance(table, ast.Dict) else table.elts if isinstance(table, SEQUENCES) else []
+    members = table.values if isinstance(table, ast.Dict) else table.elts
     found = 0
     for member in members:
         found += isinstance(member, ast.Lambda) and has_logic(member)
@@ -97,7 +96,7 @@ def logic_lambdas(table: ast.expr) -> int:
     return found
 
 
-def outermost_tables(tree: ast.Module) -> Iterator[tuple[ast.expr, Definition | None, str]]:
+def outermost_tables(tree: ast.Module) -> Iterator[tuple[TABLES, Definition | None, str]]:
     """Each table not inside another, with its enclosing class or function (None at module level)
     and, at module level, the variable it is assigned to."""
     todo: list[tuple[ast.AST, ast.AST | None, Definition | None, str]] = [(tree, None, None, "<module>")]
@@ -105,7 +104,7 @@ def outermost_tables(tree: ast.Module) -> Iterator[tuple[ast.expr, Definition | 
         node, parent, owner, label = todo.pop()
         if isinstance(node, TABLES) and not isinstance(parent, TABLES):
             yield node, owner, label
-        if isinstance(node, ast.ClassDef | Function):
+        if isinstance(node, Definition):
             owner = node
         elif owner is None and isinstance(node, ast.stmt):
             label = module_label(node, label)
@@ -131,12 +130,11 @@ def lambda_tables(tree: ast.Module, names: dict[ast.AST, str]) -> list[Finding]:
             "SLP012",
             (owner or table).lineno,
             f"{count} lambdas with logic in the table at line {table.lineno}",
-            scope,
+            names[owner] if owner else label,
             "",
         )
         for table, owner, label in outermost_tables(tree)
         if (count := logic_lambdas(table)) >= 2
-        for scope in [names[owner] if owner else label]
     ]
 
 

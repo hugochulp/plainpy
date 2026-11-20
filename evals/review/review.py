@@ -62,11 +62,14 @@ def settings() -> str:
 
 
 def complete(name: str, found: object) -> bool:
-    """A JSON object, and for a pair, a winner (A, B or tie) on every dimension, as score.py reads them."""
-    if not isinstance(found, dict) or not name.startswith("pair_"):
-        return isinstance(found, dict)
-    picks = [entry.get("winner") if isinstance(entry, dict) else entry for entry in map(found.get, "1234567")]
-    return all(str(pick).strip().upper() in {"A", "B", "TIE"} for pick in picks)
+    """What score.py reads: a winner (A, B or tie) on every dimension of a pair, a single's findings and scores."""
+    if not isinstance(found, dict):
+        return False
+    if name.startswith("pair_"):
+        picks = [entry.get("winner") if isinstance(entry, dict) else entry for entry in map(found.get, "1234567")]
+        return all(str(pick).strip().upper() in {"A", "B", "TIE"} for pick in picks)
+    scores, findings = found.get("scores"), found.get("findings")
+    return isinstance(scores, dict) and isinstance(findings, list) and all(isinstance(f, dict) for f in findings)
 
 
 def review(name: str, prompt: str, args: argparse.Namespace) -> None:

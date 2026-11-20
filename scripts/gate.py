@@ -518,7 +518,7 @@ def decide(
 
 def finish_check(project: Path, session: dict[str, Any], hook_input: dict[str, Any]) -> dict[str, Any] | None:
     base = session.get("base")
-    if session.get("skip") or not base or not is_python_project(project):
+    if session.get("skip") or not base:
         return None
     top, current = repo_top(project), snapshot(project)
     if top is None or current is None or current == base:
@@ -531,7 +531,8 @@ def finish_check(project: Path, session: dict[str, Any], hook_input: dict[str, A
     digest = f"{base}|{current}|{settings}"
     prefix = project.relative_to(top).as_posix()
     files, renamed = compare(top, prefix, base, current)
-    if digest == session.get("clean_digest") or all(name.endswith(DOC_SUFFIXES) for name in files):
+    python = is_python_project(project, files)
+    if digest == session.get("clean_digest") or not python or all(name.endswith(DOC_SUFFIXES) for name in files):
         session["clean_digest"] = digest
         return None
     blocked = session.get("blocked") or {}

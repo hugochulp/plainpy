@@ -21,7 +21,6 @@ from pathlib import Path
 from problems import PROBLEMS, checkpoint_spec, entry_file, last_checkpoint, static_assets, test_packages, tests_folder
 
 HERE = Path(__file__).resolve().parent
-PLUGIN = HERE / ".cache" / "plainpy-v0.4.1"  # `git worktree add --detach evals/.cache/plainpy-v0.4.1 v0.4.1`
 SCB_CHECK = "scb-check@0.2.0"
 EVALS = Path.home() / ".cache" / "plainpy-evals"
 TOOLS = "Bash,Read,Edit,Write,Glob,Grep,Skill"  # coding tools only: no web, MCP servers or app tools
@@ -48,7 +47,7 @@ def settings(hidden: list[Path]) -> str:
     sandbox = {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False}
     sandbox |= {"autoAllowBashIfSandboxed": True, "filesystem": {"denyRead": [str(path) for path in hidden]}}
     sandbox["network"] = {"allowedDomains": ["pypi.org", "files.pythonhosted.org"]}
-    deny = [f"Read(/{path}/**)" for path in hidden]  # //absolute/path; Read rules cover Grep and Glob too
+    deny = [f"Read(/{path}{'/**' if path.is_dir() else ''})" for path in hidden]  # //absolute; covers Grep, Glob
     return json.dumps({"permissions": {"deny": deny}, "sandbox": sandbox})
 
 
@@ -101,7 +100,7 @@ def test_count(problem: str, n: int) -> int:
     return int(found[1])
 
 
-def hidden_tests(copy: Path, python: str, problem: str, entry: str, checkpoint: int) -> dict[str, list[int]]:
+def hidden_tests(copy: Path, python: str, problem: str, checkpoint: int) -> dict[str, list[int]]:
     """[passed, total] per checkpoint's test file, run on the solution copy with a venv like Claude's."""
     subprocess.run(["uv", "venv", "-q", "--python", python], cwd=copy, check=False)
     if (copy / "requirements.txt").exists():
@@ -109,7 +108,7 @@ def hidden_tests(copy: Path, python: str, problem: str, entry: str, checkpoint: 
         subprocess.run(install, cwd=copy, check=False)  # not into an active venv, which uv would prefer
     found = {}
     for n in range(1, checkpoint + 1):
-        output = pytest(problem, n, f"--entrypoint={copy}/.venv/bin/python {copy}/{entry}.py")
+        output = pytest(problem, n, f"--entrypoint={copy}/.venv/bin/python {copy}/{entry_file(problem)}.py")
         passed = re.search(r"(\d+) passed", output)
         found[f"checkpoint_{n}"] = [int(passed[1]) if passed else 0, test_count(problem, n)]
     return found
@@ -134,9 +133,7 @@ def run_chain(problem: str, arm: str, run: int, args: argparse.Namespace) -> Non
         shutil.copytree(PROBLEMS / problem / path, workspace / path)
     ignored = [".venv/", "__pycache__/", ".pytest_cache/", *(f"/{path}/" for path in assets)]  # never reviewed
     (workspace / ".git" / "info" / "exclude").write_text("".join(f"{name}\n" for name in ignored))
-    entry = entry_file(problem)
-    last = last_checkpoint(problem)
-    for n in range(1, last + 1 if args.checkpoints is None else min(last, args.checkpoints) + 1):
+    for n in range(1, min(last_checkpoint(problem), args.checkpoints) + 1):
         if REFUSED.is_set():
             return
         prompt = PROMPT.format(env=FIRST if n == 1 else LATER, spec=checkpoint_spec(problem, n))
@@ -152,7 +149,7 @@ def run_chain(problem: str, arm: str, run: int, args: argparse.Namespace) -> Non
             copy = Path(temp) / "solution"
             shutil.copytree(workspace, copy, ignore=SOLUTION_ONLY)
             row["scb"] = scb_check(copy)  # before the test venv appears in the copy
-            row["tests"] = hidden_tests(copy, version[1] if version else "3.12", problem, entry, n)
+            row["tests"] = hidden_tests(copy, version[1] if version else "3.12", problem, n)
         with (args.out / "results.jsonl").open("a") as out:  # one short append per row: safe across threads
             out.write(json.dumps(row) + "\n")
         print(f"{problem} {arm} run {run} checkpoint {n}: tests {row['tests'][f'checkpoint_{n}']}", flush=True)
@@ -163,13 +160,12 @@ def main() -> None:
     parser.add_argument("--problems", nargs="+", default=["etl_pipeline", "code_search"])
     parser.add_argument("--arms", nargs="+", default=["without", "with"], choices=["without", "with"])
     parser.add_argument("--runs", type=int, default=3)
-    parser.add_argument("--checkpoints", type=int, help="stop after this many (default: all)")
+    parser.add_argument("--checkpoints", type=int, default=sys.maxsize, help="stop after this many (default: all)")
     parser.add_argument("--model", default="claude-opus-5-5")
     parser.add_argument("--effort", default="medium")
     parser.add_argument("--jobs", type=int, default=2)
-    parser.add_argument("--plugin", type=Path, default=PLUGIN, help="plainpy checkout for the with arm")
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    parser.add_argument("--out", type=Path, default=EVALS / stamp)
+    parser.add_argument("--plugin", type=Path, default=HERE.parent, help="default: this checkout")
+    parser.add_argument("--out", type=Path, default=EVALS / datetime.now(UTC).strftime("%Y%m%d-%H%M%S"))
     args = parser.parse_args()
     args.out = args.out.resolve()  # the sandbox's paths are read from each workspace
     others = [path for path in EVALS.glob("*") if not args.out.is_relative_to(path)]  # earlier rounds, logs, reviews

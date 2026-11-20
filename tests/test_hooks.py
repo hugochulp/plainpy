@@ -203,6 +203,15 @@ def test_a_nested_ruff_config_and_what_it_extends_count_as_the_projects_own(
     assert "# noqa: PLR2004" in module.read_text()
 
 
+@pytest.mark.parametrize("config", [b"\xff\n", b'lint = "x"\nselect = 3\n'])
+def test_a_malformed_ruff_config_doesnt_crash_the_hook(repo: Path, config: bytes) -> None:
+    (repo / "ruff.toml").write_bytes(config)
+    start_session(repo)
+    module = repo / "mod.py"
+    module.write_text("def v1(x: int) -> bool:\n    return x == 2\n")
+    assert "Traceback" not in edit(module).stderr
+
+
 def test_assert_is_allowed_in_tests(repo: Path) -> None:
     start_session(repo)
     test_file = repo / "tests" / "test_app.py"
