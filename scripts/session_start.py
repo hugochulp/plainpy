@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from _common import (
+    DOC_SUFFIXES,
     emit,
     is_python_project,
     load_settings,
@@ -31,10 +32,12 @@ plainpy is active ({profile} profile). Python you write here is checked after ev
 - Prefer plain functions. A class must hold state plus behaviour, or have more than one implementation.
 - Use Pydantic only at I/O boundaries (HTTP, files, env, CLI). Inside, use functions, then dataclasses.
 - No speculative generality: no unused parameters, flags, ABCs or extension points nobody asked for.
-- Keep the diff small. Use the stdlib before adding a dependency.
-- When a check fails, flatten the logic (early returns, guard clauses, a dict lookup, fewer cases).
-  Never split code into single-use helpers, wrap it in new classes, or add noqa/type: ignore to pass.
-- A suppression comment is refused unless it names the rule and gives a reason after ` -- `.
+- Small means less structure, not less behaviour: implement everything the task asks, edge cases
+  included. Use the stdlib before adding a dependency.
+- Input from outside (files, CLI arguments, network) can be malformed in ways the task doesn't list:
+  fail with the program's own error format, not a traceback.
+- When a check fails, its message says how to fix it: make the code simpler, not just shorter.
+- Suppress only a finding a check reported, naming the rule and a reason after ` -- `.
   Lint config changes and new runtime dependencies need the user's approval.
 - When you finish, the whole change is checked: types, tests, dead code, class design,
   duplicates and new suppressions. Fix what it reports before finishing.
@@ -46,10 +49,20 @@ def known_test_failures(project: Path) -> list[str]:
     return sorted(read_json(project / ".pytest_cache" / "v" / "cache" / "lastfailed"))
 
 
+def new_project(project: Path) -> bool:
+    """Nothing but dotfiles, docs and folders (of data, say) yet, as in a fresh `git init`: what Claude writes here
+    may well be Python. Another language's project has its own files at the top: a manifest or source."""
+    try:
+        files = [entry.name for entry in project.iterdir() if not entry.is_dir()]
+        return all(name.startswith(".") or name.endswith(DOC_SUFFIXES) for name in files)
+    except OSError:  # missing or unreadable: nothing to snapshot
+        return False
+
+
 def main() -> None:
     hook_input = read_hook_input()
     project = project_dir(hook_input)
-    if not is_python_project(project):
+    if not (is_python_project(project) or new_project(project)):
         return
     session = session_id(hook_input)
     if hook_input.get("source") in {"startup", "clear"} or "base" not in read_session(project, session):

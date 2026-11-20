@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -27,6 +28,7 @@ KEPT_SESSIONS = 20
 # Folders never analysed or snapshotted: virtualenvs, build output, caches.
 SKIP_DIRS = frozenset({".venv", "venv", "env", "node_modules", "build", "dist", "__pycache__", ".git", ".tox", ".nox"})
 PYTHON_SUFFIXES = (".py", ".pyi")
+DOC_SUFFIXES = (".md", ".rst")
 # Untracked files bigger than this are left out of snapshots (data dumps, binaries).
 MAX_SNAPSHOT_FILE_BYTES = 1_000_000
 
@@ -62,6 +64,11 @@ def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload))
 
 
+def dependencies_allowed() -> bool:
+    """PLAINPY_ALLOW_DEPENDENCIES=1 lets new dependencies through: for headless runs, where nobody can answer."""
+    return os.environ.get("PLAINPY_ALLOW_DEPENDENCIES") == "1"
+
+
 def pre_tool_decision(decision: str, reason: str) -> None:
     """Answer a PreToolUse hook: "deny" goes back to Claude, "ask" prompts the user."""
     emit(
@@ -80,9 +87,10 @@ def project_dir(hook_input: dict[str, Any]) -> Path:
     return Path(env_dir or hook_input.get("cwd") or Path.cwd()).resolve()
 
 
-def is_python_project(project: Path) -> bool:
+def is_python_project(project: Path, changed: Iterable[str] = ()) -> bool:
+    """A Python marker or module at the top or under src/, or Python among the `changed` files (a new project)."""
     markers = ("pyproject.toml", "setup.py", "setup.cfg")
-    if any((project / name).exists() for name in markers):
+    if any((project / name).exists() for name in markers) or any(name.endswith(PYTHON_SUFFIXES) for name in changed):
         return True
     return any(project.glob("*.py")) or any(project.glob("src/**/*.py"))
 

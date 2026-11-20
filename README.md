@@ -3,7 +3,7 @@
 A Claude Code plugin that keeps the Python Claude writes small and flat.
 It does this with deterministic checks run as hooks, not with longer instructions.
 
-**Status: v0.4.1.** Per-edit lint, complexity and anti-abstraction checks, guards against
+**Status: v0.5.0.** Per-edit lint, complexity and anti-abstraction checks, guards against
 silencing them, and a full check of the whole change when Claude finishes.
 
 ## What it does
@@ -25,6 +25,9 @@ silencing them, and a full check of the whole change when Claude finishes.
 - **Before every shell command:** `uv add`, `pip install`, `poetry add`, `pdm add`,
   `conda install` with new runtime packages, or a shell write to a config file, **asks you**
   first. Dev-only installs (`--dev`, `--group`) and `pip install -r` / `-e .` pass.
+- **Headless runs** (`claude -p`, CI, the Agent SDK) have nobody to answer these questions, so
+  Claude Code treats them as "no". Set `PLAINPY_ALLOW_DEPENDENCIES=1` in the environment to let
+  new dependencies through; lint and type-checker config changes are still refused.
 - **After every Write/Edit of a `.py` file:**
   1. applies safe Ruff fixes and formats the file;
   2. lints it with a broad Ruff rule set, checks cognitive complexity with complexipy, and
@@ -78,9 +81,10 @@ and `.pyi` stubs are never judged, and only definitions that are new or changed 
 | SLP009 | basedpyright's `reportUnnecessaryIsInstance`, `reportUnnecessaryComparison` and `reportUnnecessaryContains`. Only reported when your basedpyright mode turns them on (its default and `strict` do; `standard` and `basic` don't). Being basedpyright's, it can't take a slopcheck allow comment | finish | warning (error in strict) |
 | SLP010 | A module with more than 15 public functions and classes (reported again only when the count goes up; `__init__.py` is exempt), or a file named `utils.py`, `helpers.py` or `common.py` | finish | warning |
 | SLP011 | More than 2 new exception classes in the session | finish | warning |
+| SLP012 | Two or more lambdas with logic in one dict, list, tuple or set, where the complexity checks can't see their branches. Lambdas that only read a name, attribute or item (`lambda row: row.name`) don't count | every edit | error |
 
 To keep one definition, put a reason on its `def` or `class` header (any line of it, so it
-survives the formatter wrapping a long header):
+survives the formatter wrapping a long header), or for a module-level SLP012 table on its first line:
 `# slopcheck: allow SLP004 -- old name kept for existing callers`. The reason follows the
 same rules as any other suppression.
 
@@ -151,9 +155,12 @@ class_budget = 4       # new classes per session before SLP006 blocks
 | New classes per session (SLP006) | 6 | 3 | 2 |
 | Type warnings block (not just errors) | no | no | yes |
 
-Ruff also enforces at most 5 arguments, 10 branches, 6 returns and 40 statements per
-function. The plugin adds its rules on top of your own `[tool.ruff]` config with
-`--extend-select`, so your excludes and per-file ignores still apply.
+Ruff also enforces at most 5 arguments and 40 statements per function. Returns and branches
+aren't limited on their own (PLR0911, PLR0912): the two complexity limits already count them.
+Those two, TRY003 and PLR2004 aren't run unless your own Ruff config selects them, so a `noqa` for
+them is flagged as unused (RUF100), as is one for a rule Ruff runs but finds nothing for. Rules
+plainpy only skips in tests or `__init__.py` still run there. The plugin adds its rules on top of your own
+`[tool.ruff]` config with `--extend-select`, so your excludes and per-file ignores still apply.
 
 ## Develop
 
@@ -162,7 +169,7 @@ uvx --python 3.13 --with pytest pytest -q
 ```
 
 ```bash
-uvx ruff@0.17.5 check scripts tests && uvx ruff@0.17.5 format --check scripts tests
+uvx ruff@0.17.5 check scripts tests evals && uvx ruff@0.17.5 format --check scripts tests evals
 ```
 
 ## License

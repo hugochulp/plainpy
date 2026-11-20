@@ -42,8 +42,8 @@ def test_repeated_rules_collapse_to_one_line() -> None:
 
 def test_each_hint_is_printed_once_with_its_rules() -> None:
     report = format_report(LIVE_RUN, RUN)
-    assert report.count("flatten it") == 1
-    assert "- C901, PLR0912, CPX001: flatten it" in report
+    assert report.count("make it simpler") == 1
+    assert "- C901, CPX001: make it simpler" in report
     assert "- PLR0915: remove what the task does not need" in report
 
 

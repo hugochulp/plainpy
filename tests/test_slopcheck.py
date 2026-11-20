@@ -98,6 +98,14 @@ def test_editing_a_function_header_does_not_make_its_finding_new() -> None:
     assert new_findings(edited, base) == []
 
 
+def test_a_module_level_table_is_known_by_its_name_when_lines_move() -> None:
+    table = 'OPS = {"+": lambda a, b: a + b, "-": lambda a, b: a - b}\n'
+    base = file_findings(table, "m.py")
+    edited = file_findings("import math\n\nX = math.pi\n" + table, "m.py")
+    assert [f.scope for f in base] == ["OPS"]
+    assert new_findings(edited, base) == []
+
+
 def test_null_bytes_do_not_crash() -> None:
     assert file_findings("x = 1\0\n", "module.py") == []
 

@@ -13,10 +13,13 @@ number went up.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
+import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from functools import cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -58,15 +61,15 @@ RUFF_RULES = (
 RUFF_LIMITS = (
     "lint.pylint.max-args=5",
     "lint.pylint.max-positional-args=5",
-    "lint.pylint.max-branches=10",
-    "lint.pylint.max-returns=6",
     "lint.pylint.max-statements=40",
 )
-# TRY003 pushes toward one exception class per message; PLR2004 toward constant sprawl.
-IGNORED = ("TRY003", "PLR2004")
+# Not run, so a `noqa` for them is unused (RUF100), unless the project's own Ruff config selects them. TRY003 pushes toward one exception class per
+# message; PLR2004 toward constant sprawl. Too many returns or branches (PLR0911, PLR0912) is what C901
+# and complexipy already measure: a third limit on the same thing pushed Claude to cut functions up.
+IGNORED = ("TRY003", "PLR2004", "PLR0911", "PLR0912")
 # An import is often added one edit before its use, so F401 waits for the finish check.
 IGNORED_PER_EDIT = ("F401",)
-IGNORED_IN_TESTS = ("S101", "S105", "S106", "ANN", "ARG", "PLR2004")
+IGNORED_IN_TESTS = ("S101", "S105", "S106", "ANN", "ARG")
 # Imports in a package's __init__.py are usually re-exports.
 IGNORED_IN_INIT = ("F401",)
 METRIC = re.compile(r"\((\d+) > (\d+)\)")
@@ -107,9 +110,42 @@ def edited_python_file(hook_input: dict[str, Any]) -> Path | None:
     return path if path.suffix in PYTHON_SUFFIXES and path.is_file() else None
 
 
-def ruff_options(settings: Settings) -> list[str]:
+@cache
+def ruff_config(path: Path) -> dict[str, Any] | None:
+    """A Ruff config file's settings; None if it has none (a pyproject.toml without [tool.ruff]) or can't be read."""
+    try:
+        config = tomllib.loads(path.read_text())
+    except (OSError, ValueError):  # unreadable, not UTF-8 or not TOML
+        return None
+    for key in ("tool", "ruff") if path.name == "pyproject.toml" else ():
+        config = config.get(key) if isinstance(config, dict) else None
+    return config if isinstance(config, dict) else None
+
+
+@cache
+def own_selected(folder: Path) -> tuple[str, ...]:
+    """IGNORED rules that the Ruff config for files in this folder selects: they still run, so a `noqa` the
+    project needs isn't reported as unused, but plainpy doesn't report them either. Like Ruff, it takes the
+    closest config (.ruff.toml first) and the ones it `extend`s; selections are summed, which may keep a rule."""
+    names = (".ruff.toml", "ruff.toml", "pyproject.toml")
+    files = (place / name for place in (folder, *folder.parents) for name in names)
+    path = next((path for path in files if ruff_config(path) is not None), None)
+    chosen, seen = [], set()
+    while path and path not in seen and (config := ruff_config(path)) is not None:
+        seen.add(path)
+        lint = given if isinstance(given := config.get("lint"), dict) else {}
+        lists = [table.get(key) for table in (config, lint) for key in ("select", "extend-select")]
+        chosen += [str(s) for found in lists if isinstance(found, list) for s in found]
+        base = Path(os.path.expandvars(str(config["extend"]))).expanduser() if "extend" in config else None
+        path = (path.parent / base).resolve() if base else None  # an absolute base replaces path.parent
+    return tuple(code for code in IGNORED if any(s == "ALL" or code.startswith(s) for s in chosen))
+
+
+def ruff_options(run: Run) -> list[str]:
     options = ["--extend-select", ",".join(RUFF_RULES)]
-    limits = [*RUFF_LIMITS, f"lint.mccabe.max-complexity={settings.mccabe_max}"]
+    if not_run := [code for code in IGNORED if code not in own_selected(run.real_path.parent)]:
+        options += ["--extend-ignore", ",".join(not_run)]
+    limits = [*RUFF_LIMITS, f"lint.mccabe.max-complexity={run.settings.mccabe_max}"]
     for limit in limits:
         options += ["--config", limit]
     return options
@@ -117,22 +153,22 @@ def ruff_options(settings: Settings) -> list[str]:
 
 def autofix(run: Run) -> None:
     """Apply safe fixes, then format. F401 is never fixed: Claude often adds an
-    import one edit before the code that uses it."""
+    import one edit before the code that uses it. Nor is RUF100: an unused suppression is reported."""
     target = str(run.path)
-    fix = [*run.ruff, "check", *ruff_options(run.settings), "--fix", "--unfixable", "F401"]
+    fix = [*run.ruff, "check", *ruff_options(run), "--fix", "--unfixable", "F401,RUF100"]
     run_tool([*fix, "--force-exclude", "--quiet", "--exit-zero", target], run.project, timeout=TOOL_TIMEOUT)
     run_tool([*run.ruff, "format", "--force-exclude", "--quiet", target], run.project, timeout=TOOL_TIMEOUT)
 
 
 def ruff_findings(run: Run, source: str, *, per_edit: bool) -> list[Finding]:
-    args = [*run.ruff, "check", *ruff_options(run.settings), "--no-fix", "--force-exclude"]
+    args = [*run.ruff, "check", *ruff_options(run), "--no-fix", "--force-exclude"]
     args += ["--output-format", "json", "--stdin-filename", str(run.path), "-"]
     result = run_tool(args, run.project, stdin=source, timeout=TOOL_TIMEOUT)
     if result.returncode not in {0, 1}:
         raise ToolError(f"ruff failed: {result.stderr.strip()[:500]}")
     spans, lines = scope_spans(source), source.splitlines()
     ignored = (
-        IGNORED
+        own_selected(run.real_path.parent)
         + (IGNORED_PER_EDIT if per_edit else ())
         + (IGNORED_IN_TESTS if is_test_file(run.path) else ())
         + (IGNORED_IN_INIT if run.path.name == "__init__.py" else ())

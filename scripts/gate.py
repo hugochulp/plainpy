@@ -34,6 +34,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from _common import (
+    DOC_SUFFIXES,
     PYTHON_SUFFIXES,
     SKIP_DIRS,
     Settings,
@@ -67,7 +68,6 @@ MAX_LINES_PER_SECTION = 15
 MAX_REPORT_CHARS = 9000
 MAX_CACHED_BASES = 4
 WHITELIST = "vulture_whitelist.py"
-DOC_SUFFIXES = (".md", ".rst")
 # Any of these from a tool run means "this check could not run", never a crash of the whole hook.
 CHECK_ERRORS = (ToolError, OSError, ValueError, KeyError, TypeError)
 # Cached base results are only valid for the same checks; any edit to these scripts invalidates them.
@@ -158,7 +158,9 @@ def python_files_in(change: Change, tree: str) -> list[str]:
 
 def extract_base_tree(change: Change, dest: Path) -> Path:
     """Write the base snapshot's files into dest (no hooks, no export rules); return the project's folder."""
-    dest.mkdir()
+    (dest / change.prefix).mkdir(parents=True)
+    if git_raw(change.top, "ls-tree", "--name-only", change.base, *pathspec(change.prefix)) == "":
+        return dest / change.prefix  # a new project: nothing to check out, and checkout would refuse
     env = {**os.environ, "GIT_INDEX_FILE": str(dest.with_name("base-index"))}
     args = ["-c", "core.hooksPath=/dev/null", "--work-tree", str(dest), "checkout", change.base, "--", change.prefix]
     if git(change.top, *args, env=env) is None:
@@ -516,7 +518,7 @@ def decide(
 
 def finish_check(project: Path, session: dict[str, Any], hook_input: dict[str, Any]) -> dict[str, Any] | None:
     base = session.get("base")
-    if session.get("skip") or not base or not is_python_project(project):
+    if session.get("skip") or not base:
         return None
     top, current = repo_top(project), snapshot(project)
     if top is None or current is None or current == base:
@@ -529,7 +531,8 @@ def finish_check(project: Path, session: dict[str, Any], hook_input: dict[str, A
     digest = f"{base}|{current}|{settings}"
     prefix = project.relative_to(top).as_posix()
     files, renamed = compare(top, prefix, base, current)
-    if digest == session.get("clean_digest") or all(name.endswith(DOC_SUFFIXES) for name in files):
+    python = is_python_project(project, files)
+    if digest == session.get("clean_digest") or not python or all(name.endswith(DOC_SUFFIXES) for name in files):
         session["clean_digest"] = digest
         return None
     blocked = session.get("blocked") or {}

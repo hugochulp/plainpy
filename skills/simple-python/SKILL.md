@@ -5,7 +5,8 @@ description: How to write and refactor Python in a plainpy project - when a clas
 
 # Simple Python
 
-Write the least code that solves the task, in the flattest shape that stays readable.
+Write the least structure that solves the whole task, in the flattest shape that stays readable.
+Small means fewer layers, not fewer features: implement everything the task asks, edge cases included.
 plainpy's checks enforce limits on size and complexity, but they cannot see over-abstraction,
 so this guide covers what the tools miss.
 
@@ -27,6 +28,10 @@ CLI arguments, third-party API responses. After that, pass plain values or datac
 Do not create a model for data that never crosses a boundary, and do not re-validate data
 that a model or type already guarantees.
 
+Input from outside can be malformed in ways the task doesn't list (truncated, the wrong type,
+out of range). Where it enters, turn such failures into the program's own error format rather
+than a traceback.
+
 ## Avoid speculative generality
 
 - No ABC or Protocol with a single implementation.
@@ -41,9 +46,9 @@ The hook prints the file, line, rule and limit. Fix the cause:
 
 | Failure | Do | Do not |
 |---|---|---|
-| Cognitive complexity (CPX001), C901, too many branches or returns | Early returns and guard clauses; replace `if/elif` chains on a value with a dict lookup; merge duplicate branches; drop cases the task does not need | Split into single-use helpers, add a strategy class, or hide branches in lambdas |
+| Cognitive complexity (CPX001), C901 | Early returns and guard clauses; merge duplicate branches; turn an `if/elif` chain that only picks a value into a dict of values; move a step that does real work into a named function, even with one caller, where you can describe it without saying "part of". If the plain code is still over the limit, keep it whole, with the comment on its `def` line: `# noqa: C901 -- why the logic needs these branches` (CPX001: `# noqa: complexipy -- why`) | Cut a function at an arbitrary point into fragments; drop error handling the input can trigger; hide branches in lambdas or dispatch tables; add flag arguments; pack conditions into one line; add a strategy class |
 | Too many arguments (PLR0913/PLR0917) | Remove parameters callers never vary; make the rest keyword-only | Bundle them into a new config class |
-| Too many statements (PLR0915) | Remove what the task does not need, then extract a step only if it has a name and a second use | Chop the function into numbered steps |
+| Too many statements (PLR0915) | Remove what the task does not need, then move a step that has a name of its own into a function | Chop the function into numbered steps |
 | Type error (basedpyright) | Fix the types at their source | Add `Any`, `cast()` or `# type: ignore` |
 | Unused code (vulture) | Delete it, or ask the user to whitelist it if it's used dynamically | Add a fake caller to keep it alive |
 | One-method class (SLP002) | Turn it into a function; static-method-only classes become module functions | Add a second method to pass the check |
@@ -57,10 +62,11 @@ The hook prints the file, line, rule and limit. Fix the cause:
 | Defensive check (SLP009) | Delete the `isinstance` or `None` check the types already guarantee | Widen the parameter's type to justify the check |
 | Wide module or grab-bag name (SLP010) | Move functions next to their callers; make helpers private | Rename `utils.py` to `misc.py` |
 | Too many exception classes (SLP011) | Raise built-in exceptions (`ValueError`, `KeyError`) with a clear message; add a class only when a caller catches it | Nest them in one module to look smaller |
+| Lambdas in a table (SLP012) | Write the cases out as `if/elif` or `match`. A dict of named functions is fine only when each is a real step with a name of its own; for operators, use the `operator` module | Turn each lambda into a one-line `def` to pass the check |
 | Schema with several models over the class budget (SLP006) | If every model is part of the schema, tell the user, or allow it: `# slopcheck: allow SLP006 -- part of the API schema` | Flatten the schema into dicts |
 | Duplicated code (R0801) | Keep one copy, next to its callers | Move it into a new `utils.py` |
 | Failing test | Fix the code, or the test if the test is wrong and the user agrees | Delete, skip or weaken the test |
-| Any rule | Change the code | Add `# noqa`, `# type: ignore`, or edit lint config |
+| Any other rule | Change the code; if it is right as it is, suppress that one reported finding with a reason | Suppress a rule nothing reported (RUF100 flags it), or edit lint config |
 
 Only code you changed is judged. Do not "fix" unrelated existing code unless asked.
 
@@ -80,7 +86,8 @@ through the shell; ask the user, and explain why the change is needed.
 
 ## Examples
 
-Branching on a value becomes a lookup:
+Branching that only picks a value becomes a lookup (values, not code: a table of lambdas hides the
+branches from the complexity checks instead of removing them):
 
 ```python
 # Before: complexity grows with every case

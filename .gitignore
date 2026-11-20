@@ -4,3 +4,4 @@ __pycache__/
 .venv/
 complexipy-results.json
 .complexipy_cache/
+evals/.cache/

@@ -80,13 +80,24 @@ def test_session_start_records_base_and_adds_doctrine(repo: Path) -> None:
 
 
 def test_session_start_is_silent_outside_python_projects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    other = tmp_path / "docs"
+    other = tmp_path / "web"
     other.mkdir()
+    (other / "index.js").write_text("console.log(1)\n")
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(other))
     result = run_hook("session_start.py", {"source": "startup", "cwd": str(other)})
     assert result.returncode == 0
     assert result.stdout == ""
+
+
+def test_session_start_is_silent_when_the_project_folder_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gone = tmp_path / "gone"
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(gone))
+    result = run_hook("session_start.py", {"source": "startup", "cwd": str(gone)})
+    assert (result.returncode, result.stdout) == (0, "")
 
 
 def test_new_complex_function_blocks(repo: Path) -> None:
@@ -153,6 +164,52 @@ def test_autofix_sorts_imports_but_keeps_unused_ones(repo: Path) -> None:
     result = edit(module)
     assert module.read_text().startswith("import os\nimport sys\n")
     assert "F401" not in result.stderr
+
+
+def test_a_suppression_for_nothing_reported_is_kept_and_reported(repo: Path) -> None:
+    start_session(repo)
+    module = repo / "mod.py"
+    module.write_text("def v1(x: int) -> bool:\n    return x == 2  # noqa: PLR2004 -- schema version\n")
+    result = edit(module)
+    assert result.returncode == 2
+    assert "RUF100" in result.stderr
+    assert "# noqa: PLR2004" in module.read_text()
+
+
+def test_a_suppression_the_projects_own_ruff_needs_is_left_alone(repo: Path) -> None:
+    (repo / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "0"\n\n[tool.ruff.lint]\nselect = ["PL"]\n')
+    start_session(repo)
+    module = repo / "mod.py"
+    module.write_text("def v1(x: int) -> bool:\n    return x == 2  # noqa: PLR2004 -- schema version\n")
+    result = edit(module)
+    assert result.returncode == 0, result.stderr
+    assert "# noqa: PLR2004" in module.read_text()
+
+
+@pytest.mark.parametrize("extend", ["../base.toml", "$PLAINPY_BASE/base.toml", "~/base.toml"])
+def test_a_nested_ruff_config_and_what_it_extends_count_as_the_projects_own(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, extend: str
+) -> None:
+    monkeypatch.setenv("PLAINPY_BASE", str(repo))
+    monkeypatch.setenv("HOME", str(repo))  # Ruff expands both in `extend`
+    (repo / "base.toml").write_text('[lint]\nselect = ["PL"]\n')
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "ruff.toml").write_text(f'extend = "{extend}"\n')
+    start_session(repo)
+    module = repo / "pkg" / "mod.py"
+    module.write_text("def v1(x: int) -> bool:\n    return x == 2  # noqa: PLR2004 -- schema version\n")
+    result = edit(module)
+    assert result.returncode == 0, result.stderr
+    assert "# noqa: PLR2004" in module.read_text()
+
+
+@pytest.mark.parametrize("config", [b"\xff\n", b'lint = "x"\nselect = 3\n'])
+def test_a_malformed_ruff_config_doesnt_crash_the_hook(repo: Path, config: bytes) -> None:
+    (repo / "ruff.toml").write_bytes(config)
+    start_session(repo)
+    module = repo / "mod.py"
+    module.write_text("def v1(x: int) -> bool:\n    return x == 2\n")
+    assert "Traceback" not in edit(module).stderr
 
 
 def test_assert_is_allowed_in_tests(repo: Path) -> None:

@@ -132,6 +132,19 @@ def test_new_runtime_dependencies_ask_the_user(pyproject: Path, tmp_path: Path) 
     assert edit(requirements, "httpx\n", "httpx\nrich==13.0\n") == "ask"
 
 
+def test_dependencies_pass_when_allowed_but_config_still_asks(
+    pyproject: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PLAINPY_ALLOW_DEPENDENCIES", "1")
+    assert decision("guard_bash.py", {"command": "uv add requests"}) is None
+    assert edit(pyproject, '["httpx>=0.27"]', '["httpx>=0.27", "requests"]') is None
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("httpx\n")
+    assert edit(requirements, "httpx\n", "httpx\nrich==13.0\n") is None
+    assert edit(pyproject, 'select = ["E", "F"]', 'select = ["E"]') == "ask"
+    assert decision("guard_bash.py", {"command": "rm .plainpy.toml"}) == "ask"
+
+
 @pytest.mark.parametrize("content", ["", "# emptied\n", "[project\nname = 'broken'\n"])
 def test_wiping_or_breaking_pyproject_config_asks_the_user(pyproject: Path, content: str) -> None:
     assert decision("guard_edit.py", {"file_path": str(pyproject), "content": content}) == "ask"
