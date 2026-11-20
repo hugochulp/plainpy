@@ -13,6 +13,7 @@ number went up.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import tomllib
@@ -110,25 +111,36 @@ def edited_python_file(hook_input: dict[str, Any]) -> Path | None:
 
 
 @cache
-def own_selected(project: Path) -> tuple[str, ...]:
-    """IGNORED rules the project's own Ruff config selects: they still run, so a `noqa` the project needs
-    isn't reported as unused, but plainpy doesn't report them either. Ruff reads .ruff.toml first."""
-    for name in (".ruff.toml", "ruff.toml", "pyproject.toml"):
-        try:
-            config = tomllib.loads((project / name).read_text())
-        except (OSError, tomllib.TOMLDecodeError):
-            continue
-        config = config.get("tool", {}).get("ruff", {}) if name == "pyproject.toml" else config
+def ruff_config(path: Path) -> dict[str, Any] | None:
+    """A Ruff config file's settings; None if it has none (a pyproject.toml without [tool.ruff]) or can't be read."""
+    try:
+        config = tomllib.loads(path.read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    return config.get("tool", {}).get("ruff") if path.name == "pyproject.toml" else config
+
+
+@cache
+def own_selected(folder: Path) -> tuple[str, ...]:
+    """IGNORED rules that the Ruff config for files in this folder selects: they still run, so a `noqa` the
+    project needs isn't reported as unused, but plainpy doesn't report them either. Like Ruff, it takes the
+    closest config (.ruff.toml first) and the ones it `extend`s; selections are summed, which may keep a rule."""
+    names = (".ruff.toml", "ruff.toml", "pyproject.toml")
+    files = (place / name for place in (folder, *folder.parents) for name in names)
+    path = next((path for path in files if ruff_config(path) is not None), None)
+    chosen, seen = [], set()
+    while path and path not in seen and (config := ruff_config(path)) is not None:
+        seen.add(path)
         lint = config.get("lint", {})
-        keys = ("select", "extend-select")
-        chosen = [str(s) for key in keys for s in [*config.get(key, []), *lint.get(key, [])]]
-        return tuple(code for code in IGNORED if any(s == "ALL" or code.startswith(s) for s in chosen))
-    return ()
+        chosen += [str(s) for key in ("select", "extend-select") for s in [*config.get(key, []), *lint.get(key, [])]]
+        base = Path(os.path.expandvars(str(config["extend"]))).expanduser() if "extend" in config else None
+        path = (path.parent / base).resolve() if base else None  # an absolute base replaces path.parent
+    return tuple(code for code in IGNORED if any(s == "ALL" or code.startswith(s) for s in chosen))
 
 
 def ruff_options(run: Run) -> list[str]:
     options = ["--extend-select", ",".join(RUFF_RULES)]
-    if not_run := [code for code in IGNORED if code not in own_selected(run.project)]:
+    if not_run := [code for code in IGNORED if code not in own_selected(run.real_path.parent)]:
         options += ["--extend-ignore", ",".join(not_run)]
     limits = [*RUFF_LIMITS, f"lint.mccabe.max-complexity={run.settings.mccabe_max}"]
     for limit in limits:
@@ -153,7 +165,7 @@ def ruff_findings(run: Run, source: str, *, per_edit: bool) -> list[Finding]:
         raise ToolError(f"ruff failed: {result.stderr.strip()[:500]}")
     spans, lines = scope_spans(source), source.splitlines()
     ignored = (
-        own_selected(run.project)
+        own_selected(run.real_path.parent)
         + (IGNORED_PER_EDIT if per_edit else ())
         + (IGNORED_IN_TESTS if is_test_file(run.path) else ())
         + (IGNORED_IN_INIT if run.path.name == "__init__.py" else ())

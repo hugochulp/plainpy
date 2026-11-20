@@ -56,6 +56,8 @@ def main() -> None:
     out = EVALS / args.name
     if out.exists() and not (out / "solutions").is_dir():
         sys.exit(f"{out} exists and is not a review set: pick another --name")
+    if (EVALS / f"{args.name}-results").exists():  # review.py would reuse them for different programs
+        sys.exit(f"{args.name} has reviews already: pick another --name")
     shutil.rmtree(out, ignore_errors=True)
     runs = sorted(args.runs, key=lambda run: run.name)
     random.Random(args.seed).shuffle(runs)

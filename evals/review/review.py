@@ -57,8 +57,16 @@ Reply with JSON only: {{{{"1": {{{{"winner": "A" | "B" | "tie", "reason"}}}}, ..
 def settings() -> str:
     """Only the review folder: the key, the runs and other reviews are denied (reads outside cwd can't be asked in -p)."""
     hidden = [KEY, RESULTS, *(path for path in EVALS.iterdir() if path != REVIEW), Path(__file__).resolve().parents[2]]
-    deny = [f"{tool}(/{path}{'/**' if path.is_dir() else ''})" for path in hidden for tool in ("Read", "Grep", "Glob")]
+    deny = [f"Read(/{path}{'/**' if path.is_dir() else ''})" for path in hidden]  # covers Grep and Glob too
     return json.dumps({"permissions": {"deny": deny}})
+
+
+def complete(name: str, found: object) -> bool:
+    """A JSON object, and for a pair, a winner (A, B or tie) on every dimension, as score.py reads them."""
+    if not isinstance(found, dict) or not name.startswith("pair_"):
+        return isinstance(found, dict)
+    picks = [entry.get("winner") if isinstance(entry, dict) else entry for entry in map(found.get, "1234567")]
+    return all(str(pick).strip().upper() in {"A", "B", "TIE"} for pick in picks)
 
 
 def review(name: str, prompt: str, args: argparse.Namespace) -> None:
@@ -78,7 +86,7 @@ def review(name: str, prompt: str, args: argparse.Namespace) -> None:
         session["review"] = json.loads(found[0]) if found else None
     except ValueError:
         session["review"] = None
-    if session.get("is_error") or session["review"] is None:
+    if session.get("is_error") or not complete(name, session["review"]):
         print(f"{name}: no review ({session.get('subtype')}): {(session.get('result') or stderr)[:300]}", flush=True)
         (RESULTS / f"{name}.failed.json").write_text(json.dumps(session, indent=1))
         return

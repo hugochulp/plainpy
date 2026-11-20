@@ -23,13 +23,15 @@ from problems import PROBLEMS, checkpoint_spec, entry_file, last_checkpoint, sta
 HERE = Path(__file__).resolve().parent
 PLUGIN = HERE / ".cache" / "plainpy-v0.4.1"  # `git worktree add --detach evals/.cache/plainpy-v0.4.1 v0.4.1`
 SCB_CHECK = "scb-check@0.2.0"
+EVALS = Path.home() / ".cache" / "plainpy-evals"
 TOOLS = "Bash,Read,Edit,Write,Glob,Grep,Skill"  # coding tools only: no web, MCP servers or app tools
 # What gets scored and tested: no venv, git data, or tests Claude wrote for itself (as plainpy's is_test_file).
 SOLUTION_ONLY = shutil.ignore_patterns(
     ".venv", ".git", "__pycache__", "test", "tests", "test_*.py", "*_test.py", "conftest.py"
 )
 # Nobody can answer plainpy's dependency asks in -p; pip's keychain certificate check fails in the sandbox.
-ENV = {**os.environ, "PLAINPY_ALLOW_DEPENDENCIES": "1", "PIP_USE_DEPRECATED": "legacy-certs"}
+ENV = {key: value for key, value in os.environ.items() if key not in {"VIRTUAL_ENV", "CONDA_PREFIX"}}
+ENV |= {"PLAINPY_ALLOW_DEPENDENCIES": "1", "PIP_USE_DEPRECATED": "legacy-certs"}
 REFUSED = threading.Event()  # a session errored without spending anything (e.g. a usage limit): start no more
 GIT = ["git", "-c", "user.name=plainpy-eval", "-c", "user.email=eval@localhost"]
 
@@ -42,32 +44,38 @@ PROMPT = (
 
 
 def settings(hidden: list[Path]) -> str:
-    """Bash is sandboxed to the workspace and PyPI; the hidden tests and the other runs can't be read."""
+    """Bash is sandboxed to the workspace and PyPI; the hidden tests, other runs and transcripts can't be read."""
     sandbox = {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False}
     sandbox |= {"autoAllowBashIfSandboxed": True, "filesystem": {"denyRead": [str(path) for path in hidden]}}
     sandbox["network"] = {"allowedDomains": ["pypi.org", "files.pythonhosted.org"]}
-    deny = [f"{tool}({path}/**)" for path in hidden for tool in ("Read", "Grep", "Glob")]
+    deny = [f"Read(/{path}/**)" for path in hidden]  # //absolute/path; Read rules cover Grep and Glob too
     return json.dumps({"permissions": {"deny": deny}, "sandbox": sandbox})
 
 
 def claude(workspace: Path, prompt: str, arm: str, args: argparse.Namespace, log: Path) -> dict:
     command = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--model", args.model]
     command += ["--effort", args.effort, "--permission-mode", "acceptEdits", "--setting-sources", "project"]
-    hidden = [PROBLEMS, *(args.out / name for name in args.roots if name != log.parent.name)]
+    hidden = [*args.hidden, *(args.out / name for name in args.roots if name != log.parent.name)]
     command += ["--settings", settings(hidden), "--tools", TOOLS, "--strict-mcp-config", "--max-budget-usd", "15"]
     command += ["--allowedTools", "Bash"]  # every command still runs in the sandbox; -p can't ask about the rest
     if arm == "with":
         command += ["--plugin-dir", str(args.plugin.resolve())]
+    done = None
     with log.open("w") as out, suppress(subprocess.TimeoutExpired):  # a timed-out session is killed and scored
-        subprocess.run(command, cwd=workspace, env=ENV, stdout=out, stderr=subprocess.STDOUT, timeout=3600, check=False)
-    lines = [json.loads(line) for line in log.read_text().splitlines() if line.startswith("{")]
+        done = subprocess.run(
+            command, cwd=workspace, env=ENV, stdout=out, stderr=subprocess.STDOUT, timeout=3600, check=False
+        )
+    lines = []
+    for line in filter(lambda line: line.startswith("{"), log.read_text().splitlines()):
+        with suppress(ValueError):  # the last record may be cut off by the timeout
+            lines.append(json.loads(line))
     result = next((line for line in reversed(lines) if line.get("type") == "result"), {})
     session = next((line["session_id"] for line in lines if "session_id" in line), None)
     for transcript in Path.home().glob(f".claude/projects/*/{session}.jsonl"):  # hook feedback is only kept here
         shutil.copy(transcript, log.with_suffix(".transcript.jsonl"))
-    if result.get("is_error") and not result.get("total_cost_usd"):
+    if (result.get("is_error") and not result.get("total_cost_usd")) or (done and not result):
         REFUSED.set()
-        print(f"stopping: {log.parent.name} {log.stem} was refused: {result.get('result')}", flush=True)
+        print(f"stopping: {log.parent.name} {log.stem} was refused or crashed: {result.get('result')}", flush=True)
     keep = ("subtype", "is_error", "num_turns", "duration_ms", "total_cost_usd", "usage", "session_id")
     return {key: result.get(key) for key in keep}
 
@@ -88,7 +96,7 @@ def pytest(problem: str, n: int, *args: str) -> str:
 def test_count(problem: str, n: int) -> int:
     """Tests in a checkpoint's file, so one that fails to load or times out still counts in full."""
     output = pytest(problem, n, "--entrypoint=none", "--collect-only")
-    if not (found := re.search(r"(\d+) tests? collected", output)):
+    if not (found := re.search(r"(\d+) tests? collected in", output)):  # "collected, 1 error in" fails
         raise RuntimeError(f"{problem} checkpoint {n}: hidden tests don't load:\n{output[-1500:]}")
     return int(found[1])
 
@@ -97,7 +105,8 @@ def hidden_tests(copy: Path, python: str, problem: str, entry: str, checkpoint: 
     """[passed, total] per checkpoint's test file, run on the solution copy with a venv like Claude's."""
     subprocess.run(["uv", "venv", "-q", "--python", python], cwd=copy, check=False)
     if (copy / "requirements.txt").exists():
-        subprocess.run(["uv", "pip", "install", "-q", "-r", "requirements.txt"], cwd=copy, check=False)
+        install = ["uv", "pip", "install", "-q", "--python", ".venv/bin/python", "-r", "requirements.txt"]
+        subprocess.run(install, cwd=copy, check=False)  # not into an active venv, which uv would prefer
     found = {}
     for n in range(1, checkpoint + 1):
         output = pytest(problem, n, f"--entrypoint={copy}/.venv/bin/python {copy}/{entry}.py")
@@ -160,8 +169,11 @@ def main() -> None:
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument("--plugin", type=Path, default=PLUGIN, help="plainpy checkout for the with arm")
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    parser.add_argument("--out", type=Path, default=Path.home() / ".cache" / "plainpy-evals" / stamp)
+    parser.add_argument("--out", type=Path, default=EVALS / stamp)
     args = parser.parse_args()
+    args.out = args.out.resolve()  # the sandbox's paths are read from each workspace
+    others = [path for path in EVALS.glob("*") if not args.out.is_relative_to(path)]  # earlier rounds, logs, reviews
+    args.hidden = [PROBLEMS, Path.home() / ".claude" / "projects", *others]  # every session's transcript is there
     chains = [(p, a, r) for p in args.problems for r in range(1, args.runs + 1) for a in args.arms]
     for problem in args.problems:  # fail before any session if a hidden test file doesn't load
         for n in range(1, last_checkpoint(problem) + 1):

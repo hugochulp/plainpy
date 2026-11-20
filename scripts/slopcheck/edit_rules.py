@@ -75,13 +75,16 @@ Definition = ast.ClassDef | Function
 LOGIC = ast.IfExp | ast.BoolOp | ast.Compare | ast.BinOp | ast.UnaryOp  # what a lambda's branches are made of
 
 
+def is_logic(node: ast.AST) -> bool:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.operand, ast.Constant):
+        return False  # a signed number, as in `row[-1]`
+    return isinstance(node, LOGIC) or (isinstance(node, ast.Call) and name_of(node.func) == "isinstance")
+
+
 def has_logic(function: ast.Lambda) -> bool:
     """`lambda a, b: a < b`, `lambda s: s or None` and `lambda v: isinstance(v, str)` have it (a branch's
-    condition or arms); `lambda row: row.name.lower()` and `lambda: []` don't."""
-    return any(
-        isinstance(node, LOGIC) or (isinstance(node, ast.Call) and name_of(node.func) == "isinstance")
-        for node in ast.walk(function.body)
-    )
+    condition or arms); `lambda row: row.name.lower()`, `lambda row: row[-1]` and `lambda: []` don't."""
+    return any(map(is_logic, ast.walk(function.body)))
 
 
 def logic_lambdas(table: ast.expr) -> int:

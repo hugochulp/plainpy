@@ -5,6 +5,7 @@ OPS = {"<": operator.lt, "+": operator.add}
 SORT_KEYS = {"name": lambda row: row.name.lower(), "size": lambda row: len(row["data"]), "none": lambda row: None}
 DEFAULTS = {"tags": lambda: [], "meta": lambda: {}}
 ONE = {"double": lambda x: x * 2, "label": "x"}
+ENDS = {"last": lambda row: row[-1], "previous": lambda row: row[-2]}
 
 
 def pick(rows: list[dict[str, int]]) -> list[dict[str, int]]:

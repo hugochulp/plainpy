@@ -17,7 +17,7 @@ from statistics import median
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from _findings import is_test_file
-from guard_edit import FILE_WIDE, LINE_LEVEL  # scripts/ is not a package: it goes on the path first
+from guard_edit import added_suppressions  # scripts/ is not a package: it goes on the path first
 
 RULE = re.compile(r"\.py(?::\d+)? ([A-Za-z]\w+)\b")  # "app.py:12 C901 ..." or "app.py reportX x2 ..."
 CLASS_LIKE = {"namedtuple", "NamedTuple", "TypedDict", "type", "make_dataclass"}
@@ -46,9 +46,7 @@ def shape(workspace: Path, commit: str) -> dict[str, int]:
         if not solution(name):
             continue
         source = git(workspace, "show", f"{commit}:{name}")
-        found["suppressions"] += len(LINE_LEVEL.findall(source)) + len(
-            FILE_WIDE.findall(source)
-        )  # as plainpy sees them
+        found["suppressions"] += len(added_suppressions("", source))  # comments only, as plainpy sees them
         try:
             tree = ast.parse(source)
         except SyntaxError:
@@ -95,7 +93,7 @@ def measure(out: Path, row: dict) -> tuple[dict[str, float], Counter[str]]:
         "tests_so_far": passed / total if total else 0.0,
         "erosion": row["scb"].get("erosion", float("nan")),
         "verbosity": row["scb"].get("verbosity", float("nan")),
-        "loc": row["scb"].get("total_loc", 0),
+        "loc": row["scb"].get("total_loc", float("nan")),
         **shape(workspace, commit),
         **churn(workspace, commit),
         "cost_usd": session.get("total_cost_usd") or 0.0,
@@ -134,7 +132,7 @@ def main() -> None:
     for (problem, arm, _), series in runs.items():
         for name, points in series.items():
             slopes[problem, arm][name].append(slope(points))
-    names = list(next(iter(table.values())))
+    names = list(dict.fromkeys(name for group in table.values() for name in group))  # one group may lack some
     for heading, groups in (("", table), ("\nSlope per checkpoint, median [min-max] over runs\n", slopes)):
         columns = ("problem", "arm", "cp")[: len(next(iter(groups)))]
         print(heading + "| " + " | ".join([*columns, *names]) + " |")

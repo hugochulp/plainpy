@@ -32,7 +32,7 @@ HINTS = {
     "PLR0917": "remove parameters callers never vary, or make the rest keyword-only.",
     "PLR0915": "remove what the task does not need, then move a step with a name of its own into a function.",
     "F401": "delete imports nothing uses.",
-    "RUF100": "delete the comment: nothing on that line is reported. Suppress only what a check reports.",
+    "RUF100": "remove the codes it names as unused, and the comment if no code is left. Suppress only what a check reports.",
     "SLP001": "use the one implementation directly; add an interface when a second implementation exists.",
     "SLP002": "turn the class into a function (or module-level functions). Do not add methods to pass the check.",
     "SLP004": "call the wrapped function directly and delete the wrapper.",

@@ -186,6 +186,23 @@ def test_a_suppression_the_projects_own_ruff_needs_is_left_alone(repo: Path) -> 
     assert "# noqa: PLR2004" in module.read_text()
 
 
+@pytest.mark.parametrize("extend", ["../base.toml", "$PLAINPY_BASE/base.toml", "~/base.toml"])
+def test_a_nested_ruff_config_and_what_it_extends_count_as_the_projects_own(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, extend: str
+) -> None:
+    monkeypatch.setenv("PLAINPY_BASE", str(repo))
+    monkeypatch.setenv("HOME", str(repo))  # Ruff expands both in `extend`
+    (repo / "base.toml").write_text('[lint]\nselect = ["PL"]\n')
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "ruff.toml").write_text(f'extend = "{extend}"\n')
+    start_session(repo)
+    module = repo / "pkg" / "mod.py"
+    module.write_text("def v1(x: int) -> bool:\n    return x == 2  # noqa: PLR2004 -- schema version\n")
+    result = edit(module)
+    assert result.returncode == 0, result.stderr
+    assert "# noqa: PLR2004" in module.read_text()
+
+
 def test_assert_is_allowed_in_tests(repo: Path) -> None:
     start_session(repo)
     test_file = repo / "tests" / "test_app.py"
